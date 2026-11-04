@@ -1,0 +1,50 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LLM gateway",
+      "options": { "baseURL": "{env:LLM_GATEWAY_URL}/v1", "apiKey": "{env:LLM_GATEWAY_KEY}" },
+      "models": {
+        "fast":   { "name": "fast",   "limit": { "context": 200000, "output": 8000 } },
+        "code":   { "name": "code",   "limit": { "context": 200000, "output": 8000 } },
+        "reason": { "name": "reason", "limit": { "context": 200000, "output": 8000 } }
+      }
+    }
+  },
+  "model": "gateway/code",
+  "permission": {
+    "external_directory": { "/knowledge/handbook/**": "allow", "/tmp/agent/**": "allow" },
+    "bash": {
+      "*": "allow",
+      "rm *": "ask",
+      "git push": "ask",
+      "git push *": "ask",
+      "git reset *": "ask",
+      "git clean *": "ask",
+      "sudo *": "ask",
+      "cat *.env*": "deny",
+      "cat *tfvars*": "deny",
+      "cat *keys.txt*": "deny",
+      "cat *sops-age*": "deny",
+      "gh pr merge*": "allow"
+    },
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.tfvars": "deny",
+      "*keys.txt": "deny",
+      "*/.sops-age/*": "deny",
+      "~/.config/gh/**": "deny",
+      "**/hosts.yml": "deny"
+    },
+    "mcp": {
+      "open-knowledge": {
+        "type": "local",
+        "enabled": true,
+        "command": ["ok", "mcp"]
+      }
+    }
+  }
+}

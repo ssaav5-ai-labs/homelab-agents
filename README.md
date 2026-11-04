@@ -1,0 +1,12 @@
+# homelab-agents
+
+Agent skills, crews and MCP servers for the homelab. Read by Hermes on k3s through git-sync (every 5 minutes). Nothing here is applied directly to the cluster — the GitOps source of truth is [homelab-gitops](https://github.com/ssaav5-ai-labs/homelab-gitops).
+
+## What's here
+
+- `hermes-skills/` — skills Hermes uses for chat and automation (health checks, alert triage). Reviewed in PRs; a merged skill reaches Hermes within 5 minutes.
+- Crews and MCP servers (playbook 07) go here too.
+
+## For AI agents
+
+Read [the handbook](https://github.com/ssaav5-ai-labs/handbook) first. See `AGENTS.md` for rules.
