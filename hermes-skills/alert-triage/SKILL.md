@@ -3,11 +3,11 @@ name: alert-triage
 description: Diagnose a Grafana Cloud alert with read-only cluster checks. Use when a firing alert arrives via the poller or webhook, or when asked to look at a specific alert.
 version: 0.1.0
 license: MIT
-metadata:
+  metadata:
   hermes:
     tags: [homelab, kubernetes, sre, alerting, grafana]
     requires_toolsets: [terminal]
-related_skills: [lab-status]
+    related_skills: [lab-status]
 ---
 
 # alert-triage
@@ -22,6 +22,8 @@ Extract from the incoming alert context:
 - `pod` or `node` (if present)
 - `severity`
 - `startsAt`
+
+**Label value safety.** Before using any label value (namespace, pod, node, etc.) in a shell command, check it against `^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`. Values that match: single-quote them in the command. Values that do not match: report the value as suspicious and stop — do not issue any command that contains it.
 
 ## Decision table
 
@@ -46,3 +48,8 @@ Extract from the incoming alert context:
 ## When to say "I don't know"
 
 If no evidence is found after the checks above, say "I don't know" and list what was checked. Never fabricate findings.
+
+## Limits
+
+- Read-only: never `kubectl delete`, `apply`, `edit`, `patch`, `scale`, `drain`, or `exec`.
+- If something needs a change, say what and why, and stop. Give the human the exact command to run.

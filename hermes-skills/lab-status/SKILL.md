@@ -18,15 +18,21 @@ Read-only health summary of the homelab k3s cluster. Produces a short report (fi
 1. `kubectl get nodes -o wide`
 2. `kubectl top nodes`
 3. `kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded`
-4. Pods with restarts in the last 24 hours:
+4. Pods with restarts in the last 24 hours (only count restarts whose `lastState.terminated.finishedAt` is within the last 24h):
    ```
    kubectl get pods -A -o json | python3 -c "
    import json, sys
+   from datetime import datetime, timezone, timedelta
    data = json.load(sys.stdin)
+   now = datetime.now(timezone.utc)
+   cutoff = now - timedelta(hours=24)
    for item in data['items']:
        for c in item['status'].get('containerStatuses', []):
-           if c.get('restartCount', 0) > 0:
-               print(f\"{item['metadata']['namespace']}/{item['metadata']['name']} {c['name']} restarts={c['restartCount']}\")
+           last = c.get('lastState', {}).get('terminated', {})
+           if last.get('finishedAt'):
+               t = datetime.fromisoformat(last['finishedAt'].replace('Z', '+00:00'))
+               if t > cutoff:
+                   print(f\"{item['metadata']['namespace']}/{item['metadata']['name']} {c['name']} restarts={c.get('restartCount', 0)}\")
    "
    ```
 5. `kubectl get applications -n argocd` — sync status and health
