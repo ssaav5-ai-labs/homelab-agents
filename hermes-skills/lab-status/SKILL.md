@@ -18,23 +18,11 @@ Read-only health summary of the homelab k3s cluster. Produces a short report (fi
 1. `kubectl get nodes -o wide`
 2. `kubectl top nodes`
 3. `kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded`
-4. Pods with restarts in the last 24 hours (only count restarts whose `lastState.terminated.finishedAt` is within the last 24h):
+4. Pods with restarts in the last 24 hours:
    ```
-   kubectl get pods -A -o json | python3 -c "
-   import json, sys
-   from datetime import datetime, timezone, timedelta
-   data = json.load(sys.stdin)
-   now = datetime.now(timezone.utc)
-   cutoff = now - timedelta(hours=24)
-   for item in data['items']:
-       for c in item['status'].get('containerStatuses', []):
-           last = c.get('lastState', {}).get('terminated', {})
-           if last.get('finishedAt'):
-               t = datetime.fromisoformat(last['finishedAt'].replace('Z', '+00:00'))
-               if t > cutoff:
-                   print(f\"{item['metadata']['namespace']}/{item['metadata']['name']} {c['name']} restarts={c.get('restartCount', 0)}\")
-   "
+   kubectl get pods -A -o custom-columns='NS:.metadata.namespace,POD:.metadata.name,RESTARTS:.status.containerStatuses[*].restartCount,LAST_EXIT:.status.containerStatuses[*].lastState.terminated.finishedAt' --no-headers
    ```
+   Keep only rows where RESTARTS is non-zero AND the newest LAST_EXIT is within the last 24 hours.
 5. `kubectl get applications -n argocd` — sync status and health
 6. `kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp | tail -20`
 7. PVC usage if visible: `kubectl get pvc -A`
