@@ -31,6 +31,12 @@ for dir in hermes-skills/*/; do
     skill_ok=0
   fi
 
+  if grep -nE '\<(python3|python|bash|sh)\>[[:space:]]+-c\b' "$skill_file"; then
+    echo "FAIL: $skill_file contains an inline interpreter (-c); use plain kubectl instead" >&2
+    FAIL=1
+    skill_ok=0
+  fi
+
   if (( skill_ok )); then
     echo "OK: $skill_file"
   fi
