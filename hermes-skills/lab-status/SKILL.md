@@ -20,15 +20,9 @@ Read-only health summary of the homelab k3s cluster. Produces a short report (fi
 3. `kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded`
 4. Pods with restarts in the last 24 hours:
    ```
-   kubectl get pods -A -o json | python3 -c "
-   import json, sys
-   data = json.load(sys.stdin)
-   for item in data['items']:
-       for c in item['status'].get('containerStatuses', []):
-           if c.get('restartCount', 0) > 0:
-               print(f\"{item['metadata']['namespace']}/{item['metadata']['name']} {c['name']} restarts={c['restartCount']}\")
-   "
+   kubectl get pods -A -o custom-columns='NS:.metadata.namespace,POD:.metadata.name,RESTARTS:.status.containerStatuses[*].restartCount,LAST_EXIT:.status.containerStatuses[*].lastState.terminated.finishedAt' --no-headers
    ```
+   Keep only rows where RESTARTS is non-zero AND the newest LAST_EXIT is within the last 24 hours.
 5. `kubectl get applications -n argocd` — sync status and health
 6. `kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp | tail -20`
 7. PVC usage if visible: `kubectl get pvc -A`
