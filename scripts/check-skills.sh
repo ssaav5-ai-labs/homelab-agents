@@ -31,6 +31,13 @@ for dir in hermes-skills/*/; do
     skill_ok=0
   fi
 
+  if ! yaml_err=$(awk '/^---$/{n++; next} n==1{print} n==2{exit}' "$skill_file" \
+    | python3 -c 'import sys, yaml; yaml.safe_load(sys.stdin.read())' 2>&1); then
+    echo "FAIL: $skill_file frontmatter is not valid YAML: $yaml_err" >&2
+    FAIL=1
+    skill_ok=0
+  fi
+
   if grep -nE '\<(python3|python|bash|sh)\>[[:space:]]+-c\b' "$skill_file"; then
     echo "FAIL: $skill_file contains an inline interpreter (-c); use plain kubectl instead" >&2
     FAIL=1

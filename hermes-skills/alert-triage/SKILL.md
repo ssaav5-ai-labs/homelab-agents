@@ -3,7 +3,7 @@ name: alert-triage
 description: Diagnose a Grafana Cloud alert with read-only cluster checks. Use when a firing alert arrives via the poller or webhook, or when asked to look at a specific alert.
 version: 0.1.0
 license: MIT
-  metadata:
+metadata:
   hermes:
     tags: [homelab, kubernetes, sre, alerting, grafana]
     requires_toolsets: [terminal]
