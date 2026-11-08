@@ -16,5 +16,8 @@ jobs:
           curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz" | tar xJ
           ./shellcheck-v0.11.0/shellcheck -x scripts/check-skills.sh
 
+      - name: install pyyaml
+        run: python3 -m pip install --quiet pyyaml
+
       - name: check-skills
         run: scripts/check-skills.sh
