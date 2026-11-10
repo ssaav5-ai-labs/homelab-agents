@@ -5,7 +5,8 @@ Agent skills, crews and MCP servers for the homelab. Read by Hermes on k3s throu
 ## What's here
 
 - `hermes-skills/` — skills Hermes uses for chat and automation (health checks, alert triage). Reviewed in PRs; a merged skill reaches Hermes within 5 minutes.
-- Crews and MCP servers (playbook 07) go here too.
+- `crews/` — the SRE crews behind an MCP server that Hermes calls (`investigate_alert`, `weekly_capacity_report`). Crews only get read-only tools; see `crews/README.md`.
+- `evals/alerts/` — alert payload fixtures for drilling the crews (step 9).
 
 ## For AI agents
 

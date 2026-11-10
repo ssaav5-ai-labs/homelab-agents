@@ -1,0 +1,14 @@
+{
+  "_comment": "expected cause: argocd out-of-sync (manifest error)",
+  "alertname": "ArgoCDAppOutOfSync",
+  "severity": "warning",
+  "namespace": "argocd",
+  "app": "example-app",
+  "startsAt": "2026-11-09T09:30:00Z",
+  "annotations": {
+    "description": "Application example-app is out of sync: a manifest failed to apply"
+  },
+  "labels": {
+    "application": "example-app"
+  }
+}

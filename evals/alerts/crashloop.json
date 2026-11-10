@@ -1,0 +1,15 @@
+{
+  "_comment": "expected cause: crashloop (exit code 1)",
+  "alertname": "KubePodCrashLooping",
+  "severity": "warning",
+  "namespace": "monitoring",
+  "pod": "example-crashloop-7b9b794b5c-abcde",
+  "startsAt": "2026-11-09T09:00:00Z",
+  "annotations": {
+    "description": "Pod example-crashloop-7b9b794b5c-abcde is crash looping: container exited with code 1"
+  },
+  "labels": {
+    "container": "example-crashloop",
+    "deployment": "example-crashloop"
+  }
+}

@@ -21,3 +21,24 @@ jobs:
 
       - name: check-skills
         run: scripts/check-skills.sh
+
+      - name: install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/0.13.7/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: crews sync
+        run: uv sync --all-groups
+        working-directory: crews
+
+      - name: crews ruff
+        run: uv run ruff check
+        working-directory: crews
+
+      - name: crews pytest
+        run: uv run pytest
+        working-directory: crews
+
+      - name: crews docker build
+        run: docker build -t sre-crews:ci .
+        working-directory: crews
