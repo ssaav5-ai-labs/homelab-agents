@@ -12,7 +12,7 @@ PEAK_QUERY = (
 )
 
 
-def weekly_capacity_report() -> str:
+async def weekly_capacity_report() -> str:
     analyst = Agent(
         role="Capacity analyst",
         goal="Compare requests with actual usage and propose right-sizing.",
@@ -55,5 +55,5 @@ def weekly_capacity_report() -> str:
         verbose=False,
     )
 
-    result = crew.kickoff()
+    result = await crew.kickoff_async()
     return str(result)
