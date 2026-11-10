@@ -32,7 +32,7 @@ GRAFANA_TOOLS = [
     "query_prometheus",
     "query_loki_logs",
     "list_datasources",
-    "list_alert_rules",
+    "alerting_rules_read",
 ]
 
 k8s_mcp = MCPServerHTTP(
