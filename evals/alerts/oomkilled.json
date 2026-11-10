@@ -1,0 +1,15 @@
+{
+  "_comment": "expected cause: oomkilled (memory limit too low)",
+  "alertname": "KubePodOOMKilled",
+  "severity": "critical",
+  "namespace": "monitoring",
+  "pod": "example-oom-6c4d9d7f8-xyz01",
+  "startsAt": "2026-11-09T09:15:00Z",
+  "annotations": {
+    "description": "Pod example-oom-6c4d9d7f8-xyz01 was OOMKilled; container exceeded its memory limit"
+  },
+  "labels": {
+    "container": "example-oom",
+    "deployment": "example-oom"
+  }
+}
