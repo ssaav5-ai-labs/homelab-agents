@@ -1,5 +1,4 @@
 import asyncio
-import threading
 
 from sre_crews import server
 
@@ -7,6 +6,10 @@ from sre_crews import server
 class FakeRequest:
     def __init__(self, auth=None):
         self.headers = {"authorization": auth} if auth else {}
+
+
+async def _ok() -> str:
+    return "ok"
 
 
 def test_authorized_correct_token():
@@ -21,15 +24,21 @@ def test_authorized_wrong_and_missing_token():
 
 
 def test_busy_rule(monkeypatch):
-    lock = threading.Lock()
-    lock.acquire()
-    monkeypatch.setattr(server, "_busy", lock)
-    assert server._run_guarded("x", lambda: "ok") == "busy, try again in a few minutes"
+    async def scenario() -> None:
+        lock = asyncio.Lock()
+        await lock.acquire()
+        monkeypatch.setattr(server, "_busy", lock)
+        assert await server._run_guarded("x", _ok) == "busy, try again in a few minutes"
+
+    asyncio.run(scenario())
 
 
 def test_run_guarded_returns_result(monkeypatch):
-    monkeypatch.setattr(server, "_busy", threading.Lock())
-    assert server._run_guarded("x", lambda: "ok") == "ok"
+    async def scenario() -> None:
+        monkeypatch.setattr(server, "_busy", asyncio.Lock())
+        assert await server._run_guarded("x", _ok) == "ok"
+
+    asyncio.run(scenario())
 
 
 def test_tools_and_read_only_annotations():
@@ -48,6 +57,64 @@ def test_investigate_builds_with_stub_llm(monkeypatch):
     def stub_llm(alias: str) -> LLM:
         return LLM(model=f"openai/{alias}", base_url="http://127.0.0.1:9/v1", api_key="k")
 
+    async def stub_kickoff_async(self, inputs=None):
+        return "report"
+
     monkeypatch.setattr(investigate, "make_llm", stub_llm)
-    monkeypatch.setattr("crewai.Crew.kickoff", lambda self: "report")
-    assert investigate.investigate_alert({"alertname": "X"}) == "report"
+    monkeypatch.setattr("crewai.Crew.kickoff_async", stub_kickoff_async)
+    assert asyncio.run(investigate.investigate_alert({"alertname": "X"})) == "report"
+
+
+def _stub_sync_kickoff_that_rejects_a_running_loop():
+    def stub_kickoff(self, inputs=None):
+        if asyncio.get_running_loop() is not None:
+            raise RuntimeError(
+                "Agent execution was invoked synchronously from within a running event loop"
+            )
+        return "sync-report"
+
+    return stub_kickoff
+
+
+def test_investigate_alert_handler_kickoff_async(monkeypatch):
+    from crewai import LLM, Crew
+
+    from sre_crews import investigate
+
+    def stub_llm(alias: str) -> LLM:
+        return LLM(model=f"openai/{alias}", base_url="http://127.0.0.1:9/v1", api_key="k")
+
+    async def stub_kickoff_async(self, inputs=None):
+        return "async-report"
+
+    monkeypatch.setattr(investigate, "make_llm", stub_llm)
+    monkeypatch.setattr(Crew, "kickoff", _stub_sync_kickoff_that_rejects_a_running_loop())
+    monkeypatch.setattr(Crew, "kickoff_async", stub_kickoff_async)
+
+    async def scenario() -> str:
+        monkeypatch.setattr(server, "_busy", asyncio.Lock())
+        return await server.investigate_alert({"alertname": "X"})
+
+    assert asyncio.run(scenario()) == "async-report"
+
+
+def test_weekly_capacity_report_handler_kickoff_async(monkeypatch):
+    from crewai import LLM, Crew
+
+    from sre_crews import capacity
+
+    def stub_llm(alias: str) -> LLM:
+        return LLM(model=f"openai/{alias}", base_url="http://127.0.0.1:9/v1", api_key="k")
+
+    async def stub_kickoff_async(self, inputs=None):
+        return "async-report"
+
+    monkeypatch.setattr(capacity, "make_llm", stub_llm)
+    monkeypatch.setattr(Crew, "kickoff", _stub_sync_kickoff_that_rejects_a_running_loop())
+    monkeypatch.setattr(Crew, "kickoff_async", stub_kickoff_async)
+
+    async def scenario() -> str:
+        monkeypatch.setattr(server, "_busy", asyncio.Lock())
+        return await server.weekly_capacity_report()
+
+    assert asyncio.run(scenario()) == "async-report"

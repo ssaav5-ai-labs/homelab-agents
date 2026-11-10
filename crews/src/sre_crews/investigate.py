@@ -37,7 +37,7 @@ def sanitise_alert(alert: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def investigate_alert(alert: dict[str, Any]) -> str:
+async def investigate_alert(alert: dict[str, Any]) -> str:
     alert = sanitise_alert(alert)
     alert_block = "```json\n" + json.dumps(alert, indent=2) + "\n```"
 
@@ -114,5 +114,5 @@ def investigate_alert(alert: dict[str, Any]) -> str:
         verbose=False,
     )
 
-    result = crew.kickoff()
+    result = await crew.kickoff_async()
     return str(result)
