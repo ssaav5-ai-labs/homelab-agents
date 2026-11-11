@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -10,9 +11,11 @@ from sre_crews.capacity import (
     WorkloadRow,
     compute_report,
     parse_memory_quantity,
+    parse_peaks,
     parse_pods,
     validate_workloads,
 )
+from sre_crews.mcp_client import McpResult
 
 
 def test_parse_memory_quantity():
@@ -139,3 +142,65 @@ def test_validator_accepts_known_name():
     report = Report(rows=[WorkloadRow("sre", "real", "app", "node1", 0, 0, 0, 0, 0)])
     containers = [ContainerData("sre", "real-abc", "real", "app", "node1", 512 * MIB, 1024 * MIB)]
     validate_workloads(report, containers)
+
+
+def _prometheus_vector() -> dict:
+    # Real mcp-grafana v2.2.0 query_prometheus response shape: "data" is a bare
+    # array of series (no {"resultType": ..., "result": [...]} wrapper). Two
+    # cAdvisor series for the same pod share (namespace, pod, container).
+    return {
+        "data": [
+            {
+                "metric": {
+                    "cluster": "homelab",
+                    "container": "litellm",
+                    "namespace": "llm-gateway",
+                    "pod": "litellm-9bd4dfc66-brxh2",
+                    "node": "k3s-02",
+                },
+                "value": [1794402183.693, "1039847424"],
+            },
+            {
+                "metric": {
+                    "cluster": "homelab",
+                    "container": "litellm",
+                    "namespace": "llm-gateway",
+                    "pod": "litellm-9bd4dfc66-brxh2",
+                    "node": "k3s-02",
+                },
+                "value": [1794402183.693, "967475200"],
+            },
+        ],
+        "exploreUrl": "https://example.grafana.net/explore?panes=...",
+    }
+
+
+def test_parse_peaks_grafana_v2_vector_shape():
+    payload = _prometheus_vector()
+    peaks = parse_peaks(
+        McpResult(text=json.dumps(payload), structured=payload)
+    )
+    assert peaks == {
+        ("llm-gateway", "litellm-9bd4dfc66-brxh2", "litellm"): 1039847424,
+    }
+
+
+def test_parse_peaks_grafana_v2_vector_shape_text_only():
+    payload = _prometheus_vector()
+    peaks = parse_peaks(McpResult(text=json.dumps(payload), structured=None))
+    assert peaks == {
+        ("llm-gateway", "litellm-9bd4dfc66-brxh2", "litellm"): 1039847424,
+    }
+
+
+def test_parse_peaks_range_values_shape():
+    payload = {
+        "data": [
+            {
+                "metric": {"namespace": "sre", "pod": "app-7b9c4d", "container": "app"},
+                "values": [[1730000000, "104857600"], [1730000060, "157286400"]],
+            }
+        ]
+    }
+    peaks = parse_peaks(McpResult(text=json.dumps(payload), structured=payload))
+    assert peaks == {("sre", "app-7b9c4d", "app"): 157286400}
