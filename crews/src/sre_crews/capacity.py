@@ -185,43 +185,77 @@ def parse_replicasets(structured: Any) -> dict[str, str]:
     return out
 
 
-def _prometheus_data(result: McpResult) -> dict[str, Any]:
+def _prometheus_series(result: McpResult) -> list[dict[str, Any]]:
+    """Return the series list from a ``query_prometheus`` result.
+
+    mcp-grafana v2.2.0 returns ``data`` as a bare array of series (each
+    ``{"metric": {...}, "value": [...]}``); older shapes wrapped it as
+    ``{"resultType": ..., "result": [...]}``. Accept both, plus the plain
+    JSON text body.
+    """
+    data: Any = None
     structured = result.structured
     if isinstance(structured, dict):
         data = structured.get("data")
-        if isinstance(data, dict):
-            return data
-        if isinstance(data, str):
+    elif isinstance(structured, list):
+        data = structured
+
+    if data is None:
+        text = result.text.strip()
+        if text:
             try:
-                parsed = json.loads(data)
+                parsed = json.loads(text)
             except json.JSONDecodeError:
-                return {}
-            return parsed if isinstance(parsed, dict) else {}
-    text = result.text.strip()
-    if text:
+                return []
+            data = parsed.get("data") if isinstance(parsed, dict) else parsed
+
+    if isinstance(data, dict):
+        nested = data.get("result")
+        return [s for s in (nested or []) if isinstance(s, dict)]
+    if isinstance(data, list):
+        return [s for s in data if isinstance(s, dict)]
+    return []
+
+
+def _series_peak(series: dict[str, Any]) -> int | None:
+    """Peak bytes of one series: an instant ``value`` or a range ``values``."""
+    value = series.get("value")
+    if isinstance(value, list | tuple) and len(value) >= 2:
         try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return {}
-        if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict):
-            return parsed["data"]
-    return {}
+            return int(float(value[1]))
+        except (TypeError, ValueError):
+            return None
+    values = series.get("values")
+    if isinstance(values, list):
+        numeric: list[float] = []
+        for point in values:
+            if isinstance(point, list | tuple) and len(point) >= 2:
+                try:
+                    numeric.append(float(point[1]))
+                except (TypeError, ValueError):
+                    continue
+        if numeric:
+            return int(max(numeric))
+    return None
 
 
 def parse_peaks(result: McpResult) -> dict[tuple[str, str, str], int]:
-    """Extract peak bytes keyed by ``(namespace, pod, container)``."""
-    data = _prometheus_data(result)
+    """Extract peak bytes keyed by ``(namespace, pod, container)``.
+
+    cAdvisor emits one series per container instance, so several series can
+    share a key; keep the highest peak for each.
+    """
     peaks: dict[tuple[str, str, str], int] = {}
-    for series in data.get("result") or []:
+    for series in _prometheus_series(result):
         metric = series.get("metric") or {}
         key = (
             str(metric.get("namespace", "")),
             str(metric.get("pod", "")),
             str(metric.get("container", "")),
         )
-        value = series.get("value")
-        if isinstance(value, list | tuple) and len(value) >= 2:
-            peaks[key] = int(float(value[1]))
+        peak = _series_peak(series)
+        if peak is not None:
+            peaks[key] = max(peaks.get(key, 0), peak)
     return peaks
 
 
