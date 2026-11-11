@@ -81,7 +81,11 @@ async def investigate_alert(alert: dict[str, Any]) -> str:
 
 @mcp.tool(annotations=READ_ONLY)
 async def weekly_capacity_report() -> str:
-    """Run the weekly_capacity_report crew and return right-sizing proposals."""
+    """Fetch Kubernetes requests and Grafana 7-day peaks, compute right-sizing proposals.
+
+    Data is fetched deterministically in code; the LLM only writes the one-line verdict.
+    Returns "capacity report unavailable: <reason>" when a fetch fails or finds no rows.
+    """
     return await _run_guarded("weekly_capacity_report", _weekly_capacity_report)
 
 
