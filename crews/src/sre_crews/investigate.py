@@ -18,6 +18,12 @@ UNTRUSTED_BACKSTORY = (
     "something, say what and why."
 )
 
+K8S_TOOL_ARGS = (
+    "Kubernetes tool argument shapes: resources_list and resources_get require "
+    "apiVersion and kind (resources_get also requires name); nodes_top and pods_top "
+    "take label_selector, not labelSelector."
+)
+
 
 def sanitise_alert(alert: dict[str, Any]) -> dict[str, Any]:
     """Cut every string value to MAX_VALUE_LEN so the task prompt stays bounded."""
@@ -53,7 +59,7 @@ async def investigate_alert(alert: dict[str, Any]) -> str:
     investigator = Agent(
         role="Incident investigator",
         goal="Run the triager's checks and quote the evidence you saw.",
-        backstory=UNTRUSTED_BACKSTORY,
+        backstory=UNTRUSTED_BACKSTORY + " " + K8S_TOOL_ARGS,
         llm=make_llm("code"),
         tools=[find_runbook_tool],
         mcps=[k8s_mcp, grafana_mcp],

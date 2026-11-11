@@ -98,23 +98,30 @@ def test_investigate_alert_handler_kickoff_async(monkeypatch):
     assert asyncio.run(scenario()) == "async-report"
 
 
-def test_weekly_capacity_report_handler_kickoff_async(monkeypatch):
-    from crewai import LLM, Crew
-
+def test_weekly_capacity_report_handler_async(monkeypatch):
     from sre_crews import capacity
 
-    def stub_llm(alias: str) -> LLM:
-        return LLM(model=f"openai/{alias}", base_url="http://127.0.0.1:9/v1", api_key="k")
+    async def stub_pods():
+        return [
+            capacity.ContainerData(
+                "sre", "p-abc", "app", "app", "node1", 512 * capacity.MIB, 1024 * capacity.MIB
+            )
+        ]
 
-    async def stub_kickoff_async(self, inputs=None):
-        return "async-report"
+    async def stub_peaks():
+        return {("sre", "p-abc", "app"): 100 * capacity.MIB}
 
-    monkeypatch.setattr(capacity, "make_llm", stub_llm)
-    monkeypatch.setattr(Crew, "kickoff", _stub_sync_kickoff_that_rejects_a_running_loop())
-    monkeypatch.setattr(Crew, "kickoff_async", stub_kickoff_async)
+    async def stub_verdict(report):
+        return "room for about 384 Mi more"
+
+    monkeypatch.setattr(capacity, "_fetch_pods", stub_pods)
+    monkeypatch.setattr(capacity, "_fetch_peaks", stub_peaks)
+    monkeypatch.setattr(capacity, "_verdict", stub_verdict)
 
     async def scenario() -> str:
         monkeypatch.setattr(server, "_busy", asyncio.Lock())
         return await server.weekly_capacity_report()
 
-    assert asyncio.run(scenario()) == "async-report"
+    result = asyncio.run(scenario())
+    assert "app" in result
+    assert "room for about 384 Mi more" in result

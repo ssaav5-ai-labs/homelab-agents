@@ -19,11 +19,14 @@ Call the `weekly_capacity_report` tool (the crews MCP server). It takes no argum
 
 ## Reply
 
-Post the returned table as it is, then end with:
+- If the tool returns a table, post it as it is, then end with:
 
-> Proposals only: open a PR in homelab-gitops to apply.
+  > Proposals only: open a PR in homelab-gitops to apply.
+
+- If the tool returns `capacity report unavailable: <reason>`, say exactly that and stop. Do **not** invent workloads, nodes, or numbers.
 
 ## Limits
 
 - The report proposes request/limit changes; it never applies them.
+- The table is the tool's computed output; never fill in a missing table from memory.
 - If the tool errors, times out, or returns "busy", say so and suggest running it again later.
