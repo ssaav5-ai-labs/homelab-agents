@@ -1,6 +1,6 @@
 # homelab-agents
 
-Agent skills, crews and MCP servers for the homelab. Read by Hermes on k3s through git-sync (every 5 minutes). Nothing here is applied directly to the cluster — the GitOps source of truth is [homelab-gitops](https://github.com/ssaav5-ai-labs/homelab-gitops).
+Agent skills, crews, and MCP servers for the homelab. Read by Hermes on k3s through git-sync (every 5 minutes). Nothing here is applied directly to the cluster — the GitOps source of truth is [homelab-gitops](https://github.com/ssaav5-ai-labs/homelab-gitops).
 
 ## What's here
 
