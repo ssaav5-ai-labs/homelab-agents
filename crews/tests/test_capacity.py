@@ -10,6 +10,7 @@ from sre_crews.capacity import (
     Report,
     WorkloadRow,
     compute_report,
+    group_peaks_by_workload,
     parse_memory_quantity,
     parse_peaks,
     parse_pods,
@@ -204,3 +205,71 @@ def test_parse_peaks_range_values_shape():
     }
     peaks = parse_peaks(McpResult(text=json.dumps(payload), structured=payload))
     assert peaks == {("sre", "app-7b9c4d", "app"): 157286400}
+
+
+def test_group_peaks_by_workload_folds_rollout_pods():
+    # A Deployment rolled over mid-week: two cAdvisor series, one per pod
+    # name, share the same workload. The old pod is no longer in `containers`,
+    # so it is matched by longest known-workload prefix; the higher peak wins.
+    containers = [
+        ContainerData(
+            "llm-gateway",
+            "litellm-9bd4dfc66-brxh2",
+            "litellm",
+            "litellm",
+            "k3s-02",
+            512 * MIB,
+            1024 * MIB,
+        ),
+    ]
+    peaks = {
+        ("llm-gateway", "litellm-9bd4dfc66-brxh2", "litellm"): 967475200,
+        ("llm-gateway", "litellm-6a1b2c3d4-zxk9p", "litellm"): 1039847424,
+    }
+    grouped = group_peaks_by_workload(peaks, containers)
+    assert grouped == {("llm-gateway", "litellm", "litellm"): 1039847424}
+
+
+def test_group_peaks_by_workload_keeps_hyphenated_name():
+    containers = [
+        ContainerData(
+            "monitoring", "node-exporter-abc12", "node-exporter", "node-exporter", "k3s-01", 0, 0
+        ),
+    ]
+    peaks = {("monitoring", "node-exporter-abc12", "node-exporter"): 123456}
+    assert group_peaks_by_workload(peaks, containers) == {
+        ("monitoring", "node-exporter", "node-exporter"): 123456
+    }
+
+
+def test_compute_report_drops_underprovisioned_workloads():
+    # A workload whose 7-day peak is above its request needs a raise, not a
+    # reclaim: it must not appear in the report or its per-node totals.
+    containers = [
+        ContainerData("sre", "crews-abc", "crews", "crews", "node1", 512 * MIB, 1024 * MIB),
+        ContainerData("sre", "busy-abc", "busy", "app", "node1", 256 * MIB, 1024 * MIB),
+    ]
+    peaks = {
+        ("sre", "crews-abc", "crews"): 100 * MIB,  # over-provisioned -> reclaimable
+        ("sre", "busy-abc", "app"): 512 * MIB,  # under-provisioned -> needs a raise
+    }
+    report = compute_report(containers, peaks)
+    assert [r.workload for r in report.rows] == ["crews"]
+    assert report.node_before == {"node1": 512 * MIB}
+    assert report.node_after == {"node1": 128 * MIB}
+
+
+def test_total_reclaimable_matches_node_deltas():
+    # The verdict number is total_reclaimable; it must equal the byte-level
+    # sum of per-node before/after deltas so the table and the verdict agree.
+    containers = [
+        ContainerData("sre", "crews-abc", "crews", "crews", "node1", 512 * MIB, 1024 * MIB),
+        ContainerData("sre", "gateway-abc", "gateway", "app", "node2", 1024 * MIB, 2048 * MIB),
+    ]
+    peaks = {
+        ("sre", "crews-abc", "crews"): 100 * MIB,
+        ("sre", "gateway-abc", "app"): 400 * MIB,
+    }
+    report = compute_report(containers, peaks)
+    deltas = sum(report.node_before.values()) - sum(report.node_after.values())
+    assert report.total_reclaimable == deltas

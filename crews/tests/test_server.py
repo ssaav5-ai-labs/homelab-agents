@@ -109,7 +109,7 @@ def test_weekly_capacity_report_handler_async(monkeypatch):
         ]
 
     async def stub_peaks():
-        return {("sre", "p-abc", "app"): 100 * capacity.MIB}
+        return {("sre", "app", "app"): 100 * capacity.MIB}
 
     async def stub_verdict(report):
         return "room for about 384 Mi more"

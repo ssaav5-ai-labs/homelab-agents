@@ -78,7 +78,7 @@ class Report:
 
     @property
     def total_reclaimable(self) -> int:
-        return sum(max(0, r.gap_bytes) for r in self.rows)
+        return sum(r.gap_bytes for r in self.rows)
 
 
 def parse_memory_quantity(value: str) -> int:
@@ -127,6 +127,35 @@ def _owner_of(pod: dict[str, Any], rs_owner: dict[str, str]) -> str:
     if kind == "ReplicaSet":
         return rs_owner.get(name, name)
     return name
+
+
+def group_peaks_by_workload(
+    peaks: dict[tuple[str, str, str], int], containers: list[ContainerData]
+) -> dict[tuple[str, str, str], int]:
+    """Fold pod-keyed peaks into ``(namespace, workload, container)`` keys.
+
+    cAdvisor labels each series with the pod name, so a workload that rolled
+    over mid-week has series under both the old and new pod name. Current pods
+    map to their workload exactly (ownerReferences); a pod that is no longer in
+    ``containers`` is matched by the longest known-workload prefix, which is
+    unambiguous where stripping a hash suffix is not (e.g. ``node-exporter``).
+    """
+    exact = {(c.namespace, c.pod): c.workload for c in containers}
+    known = sorted({(c.namespace, c.workload) for c in containers}, key=lambda k: -len(k[1]))
+
+    def workload_of(namespace: str, pod: str) -> str:
+        if (namespace, pod) in exact:
+            return exact[(namespace, pod)]
+        for wns, wname in known:
+            if wns == namespace and pod.startswith(wname + "-"):
+                return wname
+        return pod
+
+    out: dict[tuple[str, str, str], int] = {}
+    for (namespace, pod, container), peak in peaks.items():
+        key = (namespace, workload_of(namespace, pod), container)
+        out[key] = max(out.get(key, 0), peak)
+    return out
 
 
 def _as_items(structured: Any) -> list[Any]:
@@ -243,7 +272,9 @@ def parse_peaks(result: McpResult) -> dict[tuple[str, str, str], int]:
     """Extract peak bytes keyed by ``(namespace, pod, container)``.
 
     cAdvisor emits one series per container instance, so several series can
-    share a key; keep the highest peak for each.
+    share a key; keep the highest peak for each. Workload grouping happens in
+    :func:`group_peaks_by_workload`, where the authoritative ownerReferences
+    data is available.
     """
     peaks: dict[tuple[str, str, str], int] = {}
     for series in _prometheus_series(result):
@@ -263,13 +294,15 @@ def compute_report(
     containers: list[ContainerData], peaks: dict[tuple[str, str, str], int]
 ) -> Report:
     """Join containers to peaks, aggregate by workload, compute proposals."""
+    workload_peaks = group_peaks_by_workload(peaks, containers)
+
     by_workload: dict[tuple[str, str, str], list[ContainerData]] = {}
     for item in containers:
         by_workload.setdefault((item.namespace, item.workload, item.container), []).append(item)
 
     rows: list[WorkloadRow] = []
     for (namespace, workload, container), items in by_workload.items():
-        peak_bytes = max((peaks.get((namespace, i.pod, container), 0) for i in items), default=0)
+        peak_bytes = workload_peaks.get((namespace, workload, container), 0)
         if peak_bytes <= 0:
             continue
         request_bytes = max((i.request_bytes for i in items), default=0)
@@ -291,8 +324,12 @@ def compute_report(
             )
         )
 
-    rows.sort(key=lambda r: r.gap_bytes, reverse=True)
-    top = rows[:TOP_N]
+    # A reclaim report lists workloads whose request exceeds their proposal.
+    # Under-provisioned workloads (proposed > request) need a raise, not a
+    # reclaim, so drop them before ranking so they never dilute the totals.
+    reclaimable = [r for r in rows if r.gap_bytes > 0]
+    reclaimable.sort(key=lambda r: r.gap_bytes, reverse=True)
+    top = reclaimable[:TOP_N]
 
     node_before: dict[str, int] = {}
     node_after: dict[str, int] = {}
@@ -343,6 +380,8 @@ def format_report(report: Report) -> str:
         before = report.node_before.get(node, 0) // MIB
         after = report.node_after.get(node, 0) // MIB
         lines.append(f"- {node}: {before} -> {after}")
+    lines.append("")
+    lines.append(f"Total reclaimable: {report.total_reclaimable // MIB} Mi")
     return "\n".join(lines)
 
 
