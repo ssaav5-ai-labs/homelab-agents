@@ -9,7 +9,7 @@ Both are read-only. See the handbook's `reference-sre-crews.md` for details.
 
 ## Layout
 
-- `src/sre_crews/` — the crews (`investigate.py`, `capacity.py`), their tools (`tools.py`), the MCP server (`server.py`), and the gateway LLM config (`llm.py`).
+- `src/sre_crews/` — the crews (`investigate.py`, `capacity.py`), their tools (`tools.py`), the MCP server (`server.py`), and the gateway LLM config (`llm.py`). `lab_actions.py` is a separate, destructive MCP server (`restart_workload`) with its own entry point, deployed as its own pod.
 - `tests/` — no model, no network.
 - `Dockerfile` — built by CI into `ghcr.io/ssaav5-ai-labs/sre-crews`.
 
