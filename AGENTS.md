@@ -6,6 +6,7 @@ This repo holds agent skills, crews and MCP servers for the homelab. Hermes read
 - The handbook: https://github.com/ssaav5-ai-labs/handbook
 - The playbook protocol: `playbooks/RUNNING.md` in the handbook.
 - Decisions: `docs/decisions/` in the handbook; open questions: `docs/open-questions/`.
+- The playbook 07 run review (identifier-deny, cluster-write-guard and scratch-work rules).
 
 ## Rules
 - Never commit secrets, tokens, real public IPs or hostnames. Use placeholders.
