@@ -40,3 +40,109 @@ def test_score_prompt_contains_weights():
     assert "remote-only" in prompt
     assert "test ad" in prompt
     assert "untrusted data" in prompt.lower()
+
+
+def test_extract_json_truncated():
+    result = _extract_json(
+        '{"score": 85, "why": "great match", "gaps": "none"'
+    )
+    assert result is None
+
+
+def test_extract_json_empty():
+    result = _extract_json("")
+    assert result is None
+
+
+def test_score_error_on_unparseable(monkeypatch):
+    from job_search.score import ScoreError, score_role
+
+    calls = []
+
+    class FakeLLM:
+        def call(self, messages):
+            calls.append(messages)
+            return ""
+
+    monkeypatch.setattr("job_search.score.make_scoring_llm", lambda: FakeLLM())
+
+    monkeypatch.setattr(
+        "job_search.score.read_profile",
+        lambda: {
+            "target_titles": ["Director"],
+            "target_seniority": ["Director"],
+            "target_locations": ["Dublin"],
+            "remote_policy": "remote",
+        },
+    )
+
+    try:
+        score_role("some ad text")
+        raise AssertionError("expected ScoreError")
+    except ScoreError:
+        pass
+
+    assert len(calls) == 2
+
+
+def test_score_error_on_truncated_json(monkeypatch):
+    from job_search.score import ScoreError, score_role
+
+    calls = []
+
+    class FakeLLM:
+        def call(self, messages):
+            calls.append(messages)
+            return '{"score": 85, "why": "good", "gaps": null'  # truncated JSON
+
+    monkeypatch.setattr("job_search.score.make_scoring_llm", lambda: FakeLLM())
+
+    monkeypatch.setattr(
+        "job_search.score.read_profile",
+        lambda: {
+            "target_titles": ["Director"],
+            "target_seniority": ["Director"],
+            "target_locations": ["Dublin"],
+            "remote_policy": "remote",
+        },
+    )
+
+    try:
+        score_role("some ad text")
+        raise AssertionError("expected ScoreError")
+    except ScoreError:
+        pass
+
+    assert len(calls) == 2
+
+
+def test_score_success(monkeypatch):
+    import json
+
+    from job_search.score import score_role
+
+    calls = []
+
+    class FakeLLM:
+        def call(self, messages):
+            calls.append(messages)
+            return json.dumps(
+                {"score": 85, "why": "great fit", "gaps": "none", "must_ask": "when start?"}
+            )
+
+    monkeypatch.setattr("job_search.score.make_scoring_llm", lambda: FakeLLM())
+
+    monkeypatch.setattr(
+        "job_search.score.read_profile",
+        lambda: {
+            "target_titles": ["Director"],
+            "target_seniority": ["Director"],
+            "target_locations": ["Dublin"],
+            "remote_policy": "remote",
+        },
+    )
+
+    result = score_role("some ad text")
+    assert result["score"] == 85
+    assert result["why"] == "great fit"
+    assert len(calls) == 1
