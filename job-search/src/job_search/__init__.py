@@ -1,0 +1,1 @@
+"""Job-search MCP server and drafting crew for Hermes."""
