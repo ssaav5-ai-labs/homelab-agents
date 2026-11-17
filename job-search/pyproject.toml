@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
     "crewai==1.15.39",
+    "litellm>=1.109.1",
     "mcp==1.30.0",
     "uvicorn==0.54.0",
 ]

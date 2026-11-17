@@ -27,20 +27,3 @@ def make_llm(alias: str) -> LLM:
         timeout=60,
         extra_headers=GATEWAY_HEADERS,
     )
-
-
-def make_scoring_llm() -> LLM:
-    base = os.environ["LAB_GATEWAY_URL"].rstrip("/")
-    return LLM(
-        model="openai/jobs-fast",
-        base_url=f"{base}/v1",
-        api_key=os.environ["JOBS_GATEWAY_KEY"],
-        temperature=0.2,
-        max_tokens=2048,
-        timeout=120,
-        extra_headers=GATEWAY_HEADERS,
-        response_format={"type": "json_object"},
-        extra_body={
-            "provider": {"reasoning": {"enabled": False}},
-        },
-    )

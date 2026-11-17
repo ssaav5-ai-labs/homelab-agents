@@ -52,7 +52,7 @@ def test_parse_dealbreaker_empty():
     assert quote == ""
 
 
-def test_compute_score_perfect(monkeypatch):
+def test_compute_score_perfect():
     criteria = {
         "scope_platform_sre": {"value": "yes", "quote": "Platform Engineering"},
         "people_leadership": {"value": "yes", "quote": "leads managers"},
@@ -73,7 +73,7 @@ def test_compute_score_perfect(monkeypatch):
     assert score == 100
 
 
-def test_compute_score_capped(monkeypatch):
+def test_compute_score_capped():
     criteria = {
         "scope_platform_sre": {"value": "yes", "quote": "platform"},
         "people_leadership": {"value": "yes", "quote": "leads"},
@@ -98,7 +98,7 @@ def test_compute_score_capped(monkeypatch):
     assert score == 40
 
 
-def test_compute_score_partial_and_unknown(monkeypatch):
+def test_compute_score_partial_and_unknown():
     criteria = {
         "scope_platform_sre": {"value": "yes", "quote": "SRE"},
         "people_leadership": {"value": "partial", "quote": "leads one team"},
@@ -120,18 +120,9 @@ def test_compute_score_partial_and_unknown(monkeypatch):
     assert score == expected
 
 
-def test_score_role_empty_ad(monkeypatch):
-    from job_search.score import score_role
+def test_score_role_success(monkeypatch):
+    from job_search.score import score_role  # noqa: F811
 
-    monkeypatch.setattr(
-        "job_search.score.make_scoring_llm",
-        lambda: _FakeLLM(
-            json.dumps({
-                "criteria": {}, "dealbreakers": {},
-                "why": "", "gaps": "", "must_ask": "",
-            })
-        ),
-    )
     monkeypatch.setattr(
         "job_search.score.read_profile",
         lambda: {
@@ -141,13 +132,43 @@ def test_score_role_empty_ad(monkeypatch):
             "target_seniority": ["Director"],
         },
     )
-    result = score_role("some ad")
-    assert isinstance(result["score"], int)
+    monkeypatch.setattr(
+        "job_search.score._llm_call_with_backoff",
+        lambda prompt: (json.dumps({
+            "criteria": {
+                "scope_platform_sre": {"value": "yes", "quote": "platform"},
+                "people_leadership": {"value": "yes", "quote": "leads"},
+                "strategy_ownership": {"value": "yes", "quote": "strategy"},
+                "remote": {"value": "yes", "quote": "remote"},
+                "ai_ml_scope": {"value": "yes", "quote": "AI"},
+                "salary_vs_floor": {"value": "yes", "quote": "120k"},
+            },
+            "dealbreakers": {"ic_with_manager_title": "no", "ops_only_no_platform": "no",
+                             "legacy_onprem_only": "no", "product_eng_systems_internals": "no"},
+            "why": "great fit", "gaps": "none", "must_ask": "when start?",
+        }), {"finish_reason": "stop", "completion_tokens": 200}),
+    )
+    result = score_role("some ad", title="Director, Platform Engineering")
+    assert result["score"] == 100
 
 
-class _FakeLLM:
-    def __init__(self, response: str):
-        self._response = response
+def test_score_role_error_on_empty_content(monkeypatch):
+    import pytest
 
-    def call(self, messages):
-        return self._response
+    from job_search.score import ScoreError, score_role  # noqa: F811
+
+    monkeypatch.setattr(
+        "job_search.score.read_profile",
+        lambda: {
+            "scope_platform_sre": 20, "people_leadership": 20, "strategy_ownership": 15,
+            "remote": 15, "ai_ml_scope": 15, "salary_vs_floor": 5, "seniority_fit": 10,
+            "dealbreaker_cap": 40, "target_titles": ["Director"],
+            "target_seniority": ["Director"],
+        },
+    )
+    monkeypatch.setattr(
+        "job_search.score._llm_call_with_backoff",
+        lambda prompt: ("", {"finish_reason": "length", "completion_tokens": 0}),
+    )
+    with pytest.raises(ScoreError):
+        score_role("some ad")
