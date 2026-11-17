@@ -1,7 +1,8 @@
 """Score a role against the profile using one ``fast`` call.
 
-JSON validated against a schema; one retry on invalid JSON, then "unscored".
-The ad goes into the prompt in a fenced block marked as untrusted data.
+JSON validated against a schema; one retry on invalid JSON, then error.
+An unparseable reply is an error (never a 0). The ad goes into the prompt
+in a fenced block marked as untrusted data.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ import json
 import logging
 import re
 
-from .llm import make_llm
+from .llm import make_scoring_llm
 from .vault import read_profile
 
 logger = logging.getLogger("job-search")
@@ -69,6 +70,10 @@ Ad:
 )
 
 
+class ScoreError(RuntimeError):
+    """Raised when the scorer cannot produce a valid JSON result."""
+
+
 def _extract_json(text: str) -> dict | None:
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
@@ -77,6 +82,11 @@ def _extract_json(text: str) -> dict | None:
         return json.loads(match.group(0))
     except json.JSONDecodeError:
         return None
+
+
+def _call_llm(llm, prompt: str) -> str:
+    result = llm.call([{"role": "user", "content": prompt}])
+    return str(result)
 
 
 def score_role(ad_text: str) -> dict:
@@ -102,17 +112,20 @@ def score_role(ad_text: str) -> dict:
         ad_text=ad_text[:AD_CAP],
     )
 
-    llm = make_llm("jobs-fast")
+    llm = make_scoring_llm()
 
+    last_error: Exception | None = None
     for attempt in range(2):
         try:
-            result = llm.call([{"role": "user", "content": prompt}])
-            data = _extract_json(str(result))
+            result = _call_llm(llm, prompt)
+            data = _extract_json(result)
             if data and all(k in data for k in ("score", "why", "gaps", "must_ask")):
                 data["score"] = int(data["score"])
                 return data
+            last_error = ScoreError("invalid JSON output")
             logger.warning("score_role attempt %d: invalid JSON output", attempt + 1)
         except Exception as exc:
+            last_error = exc
             logger.warning("score_role attempt %d: %s", attempt + 1, exc)
 
-    return {"score": 0, "why": "unscored", "gaps": "", "must_ask": ""}
+    raise ScoreError(f"unparseable reply after 2 attempts: {last_error}")
