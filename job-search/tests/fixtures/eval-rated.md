@@ -1,3 +1,7 @@
+# Rated roles
+
+A few roles I've rated manually for comparison.
+
 ## 1. Senior Director of Coffee Infrastructure at Acme Corp
 - **My score:** 85
 - **Why:** Fully remote, AI-native, owns the espresso platform and SRE. Strong plus.

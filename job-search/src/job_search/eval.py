@@ -27,9 +27,15 @@ logger = logging.getLogger("job-search")
 
 def _extract_roles(path: Path) -> list[tuple[str, int, str, str]]:
     text = path.read_text(errors="replace")
-    text = text.lstrip()
-    if not text.startswith("##"):
-        raise ValueError(f"expected heading (##), got {text[:20]!r}")
+
+    pivot = text.find("\n## ")
+    if pivot == -1:
+        if text.strip().startswith("## "):
+            pivot = 0
+        else:
+            raise ValueError(f"no '## ' heading found in {path}")
+    text = text[pivot:].strip()
+
     blocks = text.split("\n## ")
     roles: list[tuple[str, int, str, str]] = []
     for block in blocks:
@@ -41,13 +47,13 @@ def _extract_roles(path: Path) -> list[tuple[str, int, str, str]]:
         ad_lines: list[str] = []
         body_started = False
         for line in lines[1:]:
-            if line.startswith("- **My score:**"):
+            if line.startswith("- **My score:"):
                 m = re.search(r"\d+", line)
                 if m:
                     user_score = int(m.group())
                 continue
-            if line.startswith("- **Why:**") or line.startswith("- **Link:**"):
-                if line.startswith("- **Link:**"):
+            if line.startswith("- **Why:") or line.startswith("- **Link:"):
+                if line.startswith("- **Link:"):
                     m = re.search(r"https?://\S+", line)
                     link = m.group(0) if m else ""
                 continue
