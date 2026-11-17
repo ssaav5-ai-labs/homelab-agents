@@ -16,6 +16,7 @@ logger = logging.getLogger("job-search")
 _LOCATION_KEYWORDS = {
     "dublin": ["dublin", "ireland", "dublin, ireland"],
     "ireland": ["ireland"],
+    "hybrid dublin": ["dublin", "ireland", "dublin, ireland"],
     "uk": ["uk", "united kingdom", "london", "england", "scotland", "wales", "belfast"],
     "eu": [
         "europe", "eu", "berlin", "amsterdam", "paris", "barcelona", "madrid",

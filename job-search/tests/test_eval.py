@@ -16,6 +16,7 @@ def test_extract_two_roles():
     assert "Senior Director of Coffee Infrastructure" in r1[2]
     assert "Acme Corp" in r1[2]
     assert "example.com/jobs/1" in r1[3]
+    assert "Senior Director of Coffee Infrastructure at Acme Corp" in r1[4]
 
     r2 = roles[1]
     assert r2[0] == "2"
@@ -24,10 +25,10 @@ def test_extract_two_roles():
     assert "Junior Barista Intern" in r2[2]
     assert "Tiny Cafe Ltd" in r2[2]
     assert "example.com/jobs/2" in r2[3]
+    assert "Junior Barista Intern" in r2[4]
 
 
 def test_empty_ad_text():
-    """A role with no body between metadata and --- must have ad_len=0."""
     text = "## 1. Ghost Role\n- **My score:** 50\n- **Link:** https://example.com/jobs/9\n---\n"
     import tempfile
 
@@ -39,3 +40,4 @@ def test_empty_ad_text():
     assert len(roles) == 1
     assert roles[0][2] == ""
     assert roles[0][1] == 50
+    assert roles[0][4] == "Ghost Role"
