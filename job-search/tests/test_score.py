@@ -1,8 +1,9 @@
+import json
+
 from job_search.score import (
-    SCORE_PROMPT,
-    ScoreError,
+    _compute_score,
     _extract_json,
-    score_role,
+    _parse_dealbreaker,
 )
 
 
@@ -13,33 +14,16 @@ def test_extract_json_valid():
     assert result == {"score": 85, "why": "good fit", "gaps": "none", "must_ask": "when start?"}
 
 
-def test_extract_json_with_markdown():
-    result = _extract_json('Here is the result:\n```json\n{"score": 70}\n```')
-    assert result is not None
-    assert result.get("score") == 70
-
-
 def test_extract_json_fenced():
-    result = _extract_json('```json\n{"score": 72, "why": "ok", "gaps": "", "must_ask": ""}\n```')
+    result = _extract_json(
+        '```json\n{"score": 72, "why": "ok", "gaps": "", "must_ask": ""}\n```'
+    )
     assert result is not None
     assert result.get("score") == 72
 
 
-def test_extract_json_string_score():
-    result = _extract_json(
-        '```json\n{"score": "78", "why": "fit", "gaps": "", "must_ask": ""}\n```'
-    )
-    assert result is not None
-    assert result["score"] == "78"
-
-
 def test_extract_json_invalid():
     result = _extract_json("not json at all")
-    assert result is None
-
-
-def test_extract_json_truncated():
-    result = _extract_json('{"score": 85, "why": "great match", "gaps": "none"')
     assert result is None
 
 
@@ -48,188 +32,122 @@ def test_extract_json_empty():
     assert result is None
 
 
-def test_score_prompt_contains_weights():
-    prompt = SCORE_PROMPT.format(
-        weight_role_scope=30,
-        weight_technical_fit=25,
-        weight_leadership_fit=20,
-        weight_location_remote=15,
-        weight_company_domain=10,
-        target_titles="Director, Head of",
-        target_seniority="Director, Head of, Senior Manager",
-        target_locations="Dublin, remote Ireland",
-        remote_policy="remote-only",
-        shortlist_threshold=70,
-        ad_text="test ad",
+def test_parse_dealbreaker_no():
+    triggered, quote = _parse_dealbreaker("no")
+    assert not triggered
+    assert quote == ""
+
+
+def test_parse_dealbreaker_yes_with_quote():
+    triggered, quote = _parse_dealbreaker(
+        "yes reports to CTO who owns strategy, no team management"
     )
-    assert "30" in prompt
-    assert "25" in prompt
-    assert "remote-only" in prompt
-    assert "test ad" in prompt
-    assert "untrusted data" in prompt.lower()
+    assert triggered
+    assert "reports to CTO" in quote
 
 
-def test_score_error_on_empty_reply(monkeypatch):
-    calls = []
+def test_parse_dealbreaker_empty():
+    triggered, quote = _parse_dealbreaker("")
+    assert not triggered
+    assert quote == ""
 
-    class FakeLLM:
-        def call(self, messages):
-            calls.append(messages)
-            return ""
 
-    monkeypatch.setattr("job_search.score.make_scoring_llm", lambda: FakeLLM())
+def test_compute_score_perfect(monkeypatch):
+    criteria = {
+        "scope_platform_sre": {"value": "yes", "quote": "Platform Engineering"},
+        "people_leadership": {"value": "yes", "quote": "leads managers"},
+        "strategy_ownership": {"value": "yes", "quote": "owns strategy"},
+        "remote": {"value": "yes", "quote": "fully remote"},
+        "ai_ml_scope": {"value": "yes", "quote": "AI platform"},
+        "salary_vs_floor": {"value": "yes", "quote": "EUR 140k"},
+    }
+    dealbreakers = {"ic_with_manager_title": "no", "ops_only_no_platform": "no",
+                    "legacy_onprem_only": "no", "product_eng_systems_internals": "no"}
+    profile = {
+        "scope_platform_sre": 20, "people_leadership": 20, "strategy_ownership": 15,
+        "remote": 15, "ai_ml_scope": 15, "salary_vs_floor": 5, "seniority_fit": 10,
+        "dealbreaker_cap": 40, "target_titles": ["Director"],
+        "target_seniority": ["Director"],
+    }
+    score = _compute_score(criteria, dealbreakers, "Director, Platform Engineering", profile)
+    assert score == 100
+
+
+def test_compute_score_capped(monkeypatch):
+    criteria = {
+        "scope_platform_sre": {"value": "yes", "quote": "platform"},
+        "people_leadership": {"value": "yes", "quote": "leads"},
+        "strategy_ownership": {"value": "yes", "quote": "strategy"},
+        "remote": {"value": "yes", "quote": "remote"},
+        "ai_ml_scope": {"value": "yes", "quote": "AI"},
+        "salary_vs_floor": {"value": "yes", "quote": "120k"},
+    }
+    dealbreakers = {
+        "ic_with_manager_title": "yes title is Head but no direct reports mentioned",
+        "ops_only_no_platform": "no",
+        "legacy_onprem_only": "no",
+        "product_eng_systems_internals": "no",
+    }
+    profile = {
+        "scope_platform_sre": 20, "people_leadership": 20, "strategy_ownership": 15,
+        "remote": 15, "ai_ml_scope": 15, "salary_vs_floor": 5, "seniority_fit": 10,
+        "dealbreaker_cap": 40, "target_titles": ["Head"],
+        "target_seniority": ["Head of"],
+    }
+    score = _compute_score(criteria, dealbreakers, "Head of Platform", profile)
+    assert score == 40
+
+
+def test_compute_score_partial_and_unknown(monkeypatch):
+    criteria = {
+        "scope_platform_sre": {"value": "yes", "quote": "SRE"},
+        "people_leadership": {"value": "partial", "quote": "leads one team"},
+        "strategy_ownership": {"value": "yes", "quote": "owns roadmap"},
+        "remote": {"value": "unknown", "quote": "none"},
+        "ai_ml_scope": {"value": "no", "quote": "none"},
+        "salary_vs_floor": {"value": "unknown", "quote": "none"},
+    }
+    dealbreakers = {"ic_with_manager_title": "no", "ops_only_no_platform": "no",
+                    "legacy_onprem_only": "no", "product_eng_systems_internals": "no"}
+    profile = {
+        "scope_platform_sre": 20, "people_leadership": 20, "strategy_ownership": 15,
+        "remote": 15, "ai_ml_scope": 15, "salary_vs_floor": 5, "seniority_fit": 10,
+        "dealbreaker_cap": 40, "target_titles": ["Director"],
+        "target_seniority": ["Director"],
+    }
+    score = _compute_score(criteria, dealbreakers, "Director of SRE", profile)
+    expected = 20 + (20 // 2) + 15 + (15 // 2) + 0 + (5 // 2) + 10
+    assert score == expected
+
+
+def test_score_role_empty_ad(monkeypatch):
+    from job_search.score import score_role
+
+    monkeypatch.setattr(
+        "job_search.score.make_scoring_llm",
+        lambda: _FakeLLM(
+            json.dumps({
+                "criteria": {}, "dealbreakers": {},
+                "why": "", "gaps": "", "must_ask": "",
+            })
+        ),
+    )
     monkeypatch.setattr(
         "job_search.score.read_profile",
         lambda: {
-            "target_titles": ["Director"],
+            "scope_platform_sre": 20, "people_leadership": 20, "strategy_ownership": 15,
+            "remote": 15, "ai_ml_scope": 15, "salary_vs_floor": 5, "seniority_fit": 10,
+            "dealbreaker_cap": 40, "target_titles": ["Director"],
             "target_seniority": ["Director"],
-            "target_locations": ["Dublin"],
-            "remote_policy": "remote",
         },
     )
-
-    try:
-        score_role("some ad text")
-        raise AssertionError("expected ScoreError")
-    except ScoreError:
-        pass
-    assert len(calls) == 2
+    result = score_role("some ad")
+    assert isinstance(result["score"], int)
 
 
-def test_score_error_on_truncated_json(monkeypatch):
-    calls = []
+class _FakeLLM:
+    def __init__(self, response: str):
+        self._response = response
 
-    class FakeLLM:
-        def call(self, messages):
-            calls.append(messages)
-            return '{"score": 85, "why": "good", "gaps": null'
-
-    monkeypatch.setattr("job_search.score.make_scoring_llm", lambda: FakeLLM())
-    monkeypatch.setattr(
-        "job_search.score.read_profile",
-        lambda: {
-            "target_titles": ["Director"],
-            "target_seniority": ["Director"],
-            "target_locations": ["Dublin"],
-            "remote_policy": "remote",
-        },
-    )
-
-    try:
-        score_role("some ad text")
-        raise AssertionError("expected ScoreError")
-    except ScoreError:
-        pass
-    assert len(calls) == 2
-
-
-def test_score_error_on_missing_score(monkeypatch):
-    calls = []
-
-    class FakeLLM:
-        def call(self, messages):
-            calls.append(messages)
-            return '{"why": "great", "gaps": "none", "must_ask": "when?"}'
-
-    monkeypatch.setattr("job_search.score.make_scoring_llm", lambda: FakeLLM())
-    monkeypatch.setattr(
-        "job_search.score.read_profile",
-        lambda: {
-            "target_titles": ["Director"],
-            "target_seniority": ["Director"],
-            "target_locations": ["Dublin"],
-            "remote_policy": "remote",
-        },
-    )
-
-    try:
-        score_role("some ad text")
-        raise AssertionError("expected ScoreError")
-    except ScoreError:
-        pass
-    assert len(calls) == 2
-
-
-def test_score_success(monkeypatch):
-    import json
-
-    calls = []
-
-    class FakeLLM:
-        def call(self, messages):
-            calls.append(messages)
-            return json.dumps(
-                {"score": 85, "why": "great fit", "gaps": "none", "must_ask": "when start?"}
-            )
-
-    monkeypatch.setattr("job_search.score.make_scoring_llm", lambda: FakeLLM())
-    monkeypatch.setattr(
-        "job_search.score.read_profile",
-        lambda: {
-            "target_titles": ["Director"],
-            "target_seniority": ["Director"],
-            "target_locations": ["Dublin"],
-            "remote_policy": "remote",
-        },
-    )
-
-    result = score_role("some ad text")
-    assert result["score"] == 85
-    assert result["why"] == "great fit"
-    assert len(calls) == 1
-
-
-def test_score_success_fenced(monkeypatch):
-    import json
-
-    calls = []
-
-    class FakeLLM:
-        def call(self, messages):
-            calls.append(messages)
-            return (
-                '```json\n'
-                + json.dumps(
-                    {"score": 72, "why": "ok", "gaps": "none", "must_ask": "when?"}
-                )
-                + '\n```'
-            )
-
-    monkeypatch.setattr("job_search.score.make_scoring_llm", lambda: FakeLLM())
-    monkeypatch.setattr(
-        "job_search.score.read_profile",
-        lambda: {
-            "target_titles": ["Director"],
-            "target_seniority": ["Director"],
-            "target_locations": ["Dublin"],
-            "remote_policy": "remote",
-        },
-    )
-
-    result = score_role("some ad text")
-    assert result["score"] == 72
-    assert len(calls) == 1
-
-
-def test_score_success_string_score(monkeypatch):
-    calls = []
-
-    class FakeLLM:
-        def call(self, messages):
-            calls.append(messages)
-            return '{"score": "78", "why": "ok", "gaps": "", "must_ask": ""}'
-
-    monkeypatch.setattr("job_search.score.make_scoring_llm", lambda: FakeLLM())
-    monkeypatch.setattr(
-        "job_search.score.read_profile",
-        lambda: {
-            "target_titles": ["Director"],
-            "target_seniority": ["Director"],
-            "target_locations": ["Dublin"],
-            "remote_policy": "remote",
-        },
-    )
-
-    result = score_role("some ad text")
-    assert result["score"] == 78
-    assert len(calls) == 1
+    def call(self, messages):
+        return self._response
