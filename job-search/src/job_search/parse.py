@@ -1,9 +1,11 @@
 """Parse job-alert emails into role records.
 
-A LinkedIn parser for its alert HTML, a generic fallback that extracts job
-links and titles, and a ``fast`` fallback only when both find nothing.
-LinkedIn links are kept only as an ID and a link for the human to click;
-the code never requests them.
+LinkedIn digests arrive as text/plain blocks separated by dashed lines.
+Each block contains: title, company, location, optional tags, and a
+``View job:`` URL.  LinkedIn URLs are kept only as an ID and a link for
+the human to click; the code never requests them.
+
+A generic fallback extracts job links and titles from other email formats.
 """
 
 from __future__ import annotations
@@ -23,24 +25,29 @@ class RoleRecord:
     description: str = ""
 
 
-_LINKEDIN_JOB_RE = re.compile(
-    r'<a[^>]*href="(https://www\.linkedin\.com/jobs/view/[^"]*)"[^>]*>'
-    r'\s*(.*?)\s*</a>',
-    re.DOTALL,
-)
-
 _LINKEDIN_ID_RE = re.compile(r"/jobs/view/(\d+)")
 
-_LINKEDIN_TITLE_RE = re.compile(r'<h3[^>]*>\s*(.*?)\s*</h3>', re.DOTALL)
-
-_LINKEDIN_COMPANY_RE = re.compile(
-    r'(?:company|at)\s*</[^>]*>\s*<[^>]*>\s*(.*?)\s*<',
-    re.DOTALL | re.IGNORECASE,
+_LINKEDIN_URL_RE = re.compile(
+    r"View job:\s*(https://www\.linkedin\.com/comm/jobs/view/\d+[^\s]*)",
+    re.IGNORECASE,
 )
 
-_LINKEDIN_LOCATION_RE = re.compile(
-    r'(?:location|in)\s*</[^>]*>\s*<[^>]*>\s*(.*?)\s*<',
-    re.DOTALL | re.IGNORECASE,
+_LINKEDIN_DASH_SEP = re.compile(r"\n-{30,}\n")
+
+_TAG_LINES = {
+    "this company is actively hiring",
+    "apply with resume & profile",
+    "see all jobs on linkedin:",
+    "apply with resume and profile",
+}
+
+_TAG_STARTS = (
+    "see all jobs",
+    "manage your job alerts",
+    "this email was intended",
+    "learn why we",
+    "stand out and let hirers",
+    "you are receiving",
 )
 
 _GENERIC_URL_RE = re.compile(
@@ -59,28 +66,75 @@ _GENERIC_COMPANY_RE = re.compile(
 )
 
 
-def parse_linkedin_alert(html: str) -> list[RoleRecord]:
+def parse_linkedin_digest(text: str) -> list[RoleRecord]:
+    """Parse LinkedIn text/plain job-alert digest format.
+
+    Jobs are separated by lines of dashes.  Each block has::
+
+        Title
+        Company
+        Location
+        [optional: This company is actively hiring]
+        [optional: Apply with resume & profile]
+        View job: https://www.linkedin.com/comm/jobs/view/12345/...
+
+    Returns one RoleRecord per job block.
+    """
+    blocks = _LINKEDIN_DASH_SEP.split(text)
     records: list[RoleRecord] = []
-    for match in _LINKEDIN_JOB_RE.finditer(html):
-        url = match.group(1)
-        snippet = match.group(2).strip()
-        id_match = _LINKEDIN_ID_RE.search(url)
+
+    for block in blocks:
+        lines = [line.strip() for line in block.split("\n") if line.strip()]
+        if not lines:
+            continue
+
+        if lines[0].startswith("Your job alert"):
+            lines = lines[1:]
+
+        if not lines:
+            continue
+
+        title = lines[0] if len(lines) > 0 else ""
+        company = lines[1] if len(lines) > 1 else ""
+
+        location = ""
+        url = ""
+        skip = 0
+        for i in range(2, len(lines)):
+            line = lines[i]
+            low = line.lower().strip("= ")
+            if low in _TAG_LINES or low.startswith(_TAG_STARTS):
+                skip += 1
+                continue
+            url_match = _LINKEDIN_URL_RE.search(line)
+            if url_match:
+                url = url_match.group(1)
+                continue
+            if i == 2 and not location:
+                location = line
+        if not title:
+            continue
+
+        id_match = _LINKEDIN_ID_RE.search(url) if url else None
         source_id = id_match.group(1) if id_match else ""
 
-        title_match = _LINKEDIN_TITLE_RE.search(snippet)
-        title = title_match.group(1).strip() if title_match else ""
-
-        company_match = re.search(r'\b([A-Z][A-Za-z0-9 .&]+?)\s*(?:<|$)', snippet)
-        company = company_match.group(1).strip() if company_match else ""
+        if not source_id:
+            continue
 
         records.append(RoleRecord(
             title=title,
             company=company,
+            location=location,
             url=url,
             source="linkedin",
             source_id=source_id,
         ))
+
     return records
+
+
+def _is_linkedin(text: str) -> bool:
+    return "linkedin.com" in text.lower() or "linkedin" in text.lower()
 
 
 def parse_generic(text: str) -> list[RoleRecord]:
@@ -102,9 +156,12 @@ def parse_generic(text: str) -> list[RoleRecord]:
     return records
 
 
-def parse_alert(text: str) -> list[RoleRecord]:
-    records = parse_linkedin_alert(text) or parse_generic(text)
-    if records:
+def parse_alert(text: str, content_type: str = "text/plain") -> list[RoleRecord]:
+    if _is_linkedin(text):
+        records = []
+        if "text/plain" in content_type:
+            records = parse_linkedin_digest(text)
+        if not records:
+            records = parse_generic(text)
         return records
-
-    return []
+    return parse_generic(text)

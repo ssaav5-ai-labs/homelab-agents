@@ -1,8 +1,9 @@
 """Daily job-triage entry point (CronJob).
 
 Reads unseen job-alert emails from the dedicated mailbox via IMAP
-(BODY.PEEK, read-only), parses them, applies deterministic rules,
-scores with ``fast``, and writes ``digests/YYYY-MM-DD.md`` into the vault.
+(BODY.PEEK, read-only), filters by allowed From addresses, parses them,
+applies deterministic rules, scores with ``fast``, and writes
+``digests/YYYY-MM-DD.md`` into the vault.
 """
 
 from __future__ import annotations
@@ -25,6 +26,13 @@ logger = logging.getLogger("job-search.triage")
 
 ENABLED = os.environ.get("JOB_TRIAGE_ENABLED", "0") in ("1", "true", "yes")
 
+_DEFAULT_ALLOWED_SENDERS = "jobalerts-noreply@linkedin.com"
+
+
+def _allowed_senders() -> set[str]:
+    raw = os.environ.get("TRIAGE_ALLOWED_SENDERS", _DEFAULT_ALLOWED_SENDERS)
+    return {a.strip().lower() for a in raw.split(",") if a.strip()}
+
 
 def _imap_connect() -> imaplib.IMAP4_SSL:
     host = os.environ["IMAP_HOST"]
@@ -37,7 +45,7 @@ def _imap_connect() -> imaplib.IMAP4_SSL:
     return conn
 
 
-def _fetch_new_alerts(conn: imaplib.IMAP4_SSL) -> list[str]:
+def _fetch_new_alerts(conn: imaplib.IMAP4_SSL) -> list[bytes]:
     conn.select("INBOX", readonly=True)
     typ, data = conn.search(None, "UNSEEN")
     if typ != "OK":
@@ -49,27 +57,42 @@ def _fetch_new_alerts(conn: imaplib.IMAP4_SSL) -> list[str]:
         return []
 
     logger.info("fetching %d unseen messages with BODY.PEEK", len(ids))
-    bodies: list[str] = []
+    bodies: list[bytes] = []
     for msg_id in ids:
         typ, data = conn.fetch(msg_id, "(BODY.PEEK[])")
         if typ != "OK":
             logger.warning("IMAP FETCH %s failed: %s", msg_id, typ)
             continue
-        bodies.append(data[0][1].decode("utf-8", errors="replace"))
+        bodies.append(data[0][1])
 
     return bodies
 
 
-def _extract_text(msg_bytes: str) -> str:
-    msg = email.message_from_string(msg_bytes, policy=email.policy.default)
-    parts: list[str] = []
+def _extract(msg_bytes: bytes) -> tuple[str, str, str] | None:
+    """Return (from_addr, text/plain body, text/html body) or None if sender not allowed."""
+    msg = email.message_from_bytes(msg_bytes, policy=email.policy.default)
+    from_addr = msg.get("From", "")
+    from_addr_low = from_addr.lower()
+    allowed = _allowed_senders()
+
+    if not any(addr in from_addr_low for addr in allowed):
+        logger.info("ignoring message from %s (not in allowed senders)", from_addr)
+        return None
+
+    plain = ""
+    html = ""
     for part in msg.walk():
-        content_type = part.get_content_type()
-        if content_type in ("text/plain", "text/html"):
-            payload = part.get_payload(decode=True)
-            if payload:
-                parts.append(payload.decode("utf-8", errors="replace"))
-    return "\n".join(parts)
+        ct = part.get_content_type()
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        decoded = payload.decode("utf-8", errors="replace")
+        if ct == "text/plain" and not plain:
+            plain = decoded
+        elif ct == "text/html" and not html:
+            html = decoded
+
+    return from_addr, plain, html
 
 
 def run() -> None:
@@ -99,10 +122,24 @@ def run() -> None:
         return
 
     all_records = []
+    ignored = 0
     for raw in alerts:
-        text = _extract_text(raw)
-        records = _parse_alert(text)
+        extracted = _extract(raw)
+        if extracted is None:
+            ignored += 1
+            continue
+        _from_addr, plain, html = extracted
+        if plain:
+            records = _parse_alert(plain, "text/plain")
+            if not records and html:
+                records = _parse_alert(html, "text/html")
+        elif html:
+            records = _parse_alert(html, "text/html")
+        else:
+            continue
         all_records.extend(records)
+
+    logger.info("parsed %d records, ignored %d messages", len(all_records), ignored)
 
     passed, skipped = apply_rules(all_records)
 
@@ -122,7 +159,8 @@ def run() -> None:
     lines = [
         f"# Daily digest {today}",
         "",
-        f"Alerts: {len(alerts)}, after rules: {len(passed)}, shortlist: {len(shortlist)}",
+        f"Alerts: {len(alerts)}, ignored: {ignored}, "
+        f"after rules: {len(passed)}, shortlist: {len(shortlist)}",
         f"Threshold: {threshold}, cap: {cap}",
         "",
     ]
