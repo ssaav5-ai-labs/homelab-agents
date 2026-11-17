@@ -27,30 +27,35 @@ logger = logging.getLogger("job-search")
 
 def _extract_roles(path: Path) -> list[tuple[str, int, str, str]]:
     text = path.read_text(errors="replace")
+    text = text.lstrip()
+    if not text.startswith("##"):
+        raise ValueError(f"expected heading (##), got {text[:20]!r}")
     blocks = text.split("\n## ")
     roles: list[tuple[str, int, str, str]] = []
-    for block in blocks[1:]:
+    for block in blocks:
         lines = block.split("\n")
-        header = lines[0]
+        header = lines[0].removeprefix("## ").strip()
         num = header.split(".")[0].strip()
         user_score = 0
         link = ""
         ad_lines: list[str] = []
-        in_ad = False
+        body_started = False
         for line in lines[1:]:
             if line.startswith("- **My score:**"):
                 m = re.search(r"\d+", line)
                 if m:
                     user_score = int(m.group())
-            elif line.startswith("- **Link:**"):
-                m = re.search(r"https?://\S+", line)
-                link = m.group(0) if m else ""
-            elif line == "---":
-                in_ad = True
                 continue
-            elif in_ad and line == "---":
+            if line.startswith("- **Why:**") or line.startswith("- **Link:**"):
+                if line.startswith("- **Link:**"):
+                    m = re.search(r"https?://\S+", line)
+                    link = m.group(0) if m else ""
+                continue
+            if line == "---":
                 break
-            elif in_ad:
+            if line.strip() and not line.startswith("- "):
+                body_started = True
+            if body_started:
                 ad_lines.append(line)
         ad_text = "\n".join(ad_lines).strip()
         roles.append((num, user_score, ad_text, link))
@@ -97,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.flush()
         raw_reply = ""
         try:
+            if not ad.strip():
+                raise ScoreError("empty ad text (ad_len=0)")
             result, raw_reply = score_role_with_raw(ad)
             ai = int(result["score"])
         except ScoreError as exc:
@@ -110,8 +117,8 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.flush()
             ai = exc
         scores.append((num, user, ai))
-        if args.explain and raw_reply:
-            _print_explain(num, raw_reply)
+        if args.explain:
+            _print_explain(num, raw_reply, len(ad))
     print()
 
     print(f"{'#':<4} {'You':>5} {'AI':>5} {'Δ':>5}")
@@ -138,11 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _print_explain(num: str, raw: str) -> None:
+def _print_explain(num: str, raw: str, ad_len: int) -> None:
     """Emit one diagnostic line per role."""
     raw = raw.strip()
     has_fence = raw.startswith("```")
-    data = _extract_json(raw)
+    data = _extract_json(raw) if raw else None
     if data and isinstance(data, dict):
         keys = sorted(data.keys())
         score_val = data.get("score")
@@ -153,7 +160,7 @@ def _print_explain(num: str, raw: str) -> None:
         score_type = "missing"
     fence_note = "(fenced)" if has_fence else "(unfenced)"
     print(
-        f"  [{num}] len={len(raw)} {fence_note} keys={keys} "
+        f"  [{num}] ad={ad_len} len={len(raw)} {fence_note} keys={keys} "
         f"score={score_val!r} ({score_type})",
         file=sys.stderr,
     )
