@@ -42,3 +42,19 @@ jobs:
       - name: crews docker build
         run: docker build -t sre-crews:ci .
         working-directory: crews
+
+      - name: job-search sync
+        run: uv sync --all-groups
+        working-directory: job-search
+
+      - name: job-search ruff
+        run: uv run ruff check
+        working-directory: job-search
+
+      - name: job-search pytest
+        run: uv run pytest
+        working-directory: job-search
+
+      - name: job-search docker build
+        run: docker build -t job-search:ci .
+        working-directory: job-search

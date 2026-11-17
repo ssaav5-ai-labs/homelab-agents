@@ -1,0 +1,1 @@
+"""Allow ``python -m job_search.server`` and ``python -m job_search.triage``."""
