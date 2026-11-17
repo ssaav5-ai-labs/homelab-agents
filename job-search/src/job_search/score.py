@@ -74,7 +74,18 @@ class ScoreError(RuntimeError):
     """Raised when the scorer cannot produce a valid JSON result."""
 
 
+def _strip_fence(text: str) -> str:
+    """Remove one leading and one trailing code fence if present."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+        text = text.strip()
+    return text
+
+
 def _extract_json(text: str) -> dict | None:
+    text = _strip_fence(text)
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         return None
@@ -84,12 +95,40 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+def _validate(data: dict) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    score = data.get("score")
+    if score is None:
+        return None
+    if isinstance(score, str):
+        try:
+            score = int(score)
+        except (ValueError, TypeError):
+            return None
+    if isinstance(score, bool):
+        return None
+    if not isinstance(score, int):
+        return None
+    if score < 0 or score > 100:
+        return None
+    why = data.get("why", "")
+    gaps = data.get("gaps", "")
+    must_ask = data.get("must_ask", "")
+    return {"score": score, "why": str(why), "gaps": str(gaps), "must_ask": str(must_ask)}
+
+
 def _call_llm(llm, prompt: str) -> str:
     result = llm.call([{"role": "user", "content": prompt}])
+    if isinstance(result, dict):
+        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if content:
+            return str(content)
+        return json.dumps(result)
     return str(result)
 
 
-def score_role(ad_text: str) -> dict:
+def _build_prompt(ad_text: str) -> str:
     profile = read_profile()
     weights = {
         "weight_role_scope": profile.get("weight_role_scope", 30),
@@ -98,7 +137,7 @@ def score_role(ad_text: str) -> dict:
         "weight_location_remote": profile.get("weight_location_remote", 15),
         "weight_company_domain": profile.get("weight_company_domain", 10),
     }
-    prompt = SCORE_PROMPT.format(
+    return SCORE_PROMPT.format(
         weight_role_scope=weights["weight_role_scope"],
         weight_technical_fit=weights["weight_technical_fit"],
         weight_leadership_fit=weights["weight_leadership_fit"],
@@ -112,20 +151,73 @@ def score_role(ad_text: str) -> dict:
         ad_text=ad_text[:AD_CAP],
     )
 
+
+def _score_attempt(llm, prompt: str):
+    """Run one scoring attempt.  Returns (parsed_dict, raw_str) or raises."""
+    raw = _call_llm(llm, prompt)
+    data = _extract_json(raw)
+    if data is None:
+        raise ScoreError("no JSON object found in reply")
+    validated = _validate(data)
+    if validated is None:
+        raise ScoreError("JSON parsed but score field invalid or missing")
+    return validated, raw
+
+
+def score_role(ad_text: str) -> dict:
+    prompt = _build_prompt(ad_text)
     llm = make_scoring_llm()
 
-    last_error: Exception | None = None
+    last_raw: str = ""
     for attempt in range(2):
         try:
-            result = _call_llm(llm, prompt)
-            data = _extract_json(result)
-            if data and all(k in data for k in ("score", "why", "gaps", "must_ask")):
-                data["score"] = int(data["score"])
-                return data
-            last_error = ScoreError("invalid JSON output")
-            logger.warning("score_role attempt %d: invalid JSON output", attempt + 1)
+            result, raw = _score_attempt(llm, prompt)
+            return result
+        except ScoreError as exc:
+            last_raw = raw if "raw" in dir() else ""
+            logger.warning(
+                "score_role attempt %d: %s (raw_len=%d, has_fence=%s)",
+                attempt + 1,
+                exc,
+                len(last_raw),
+                last_raw.strip().startswith("```") if last_raw else False,
+            )
         except Exception as exc:
-            last_error = exc
             logger.warning("score_role attempt %d: %s", attempt + 1, exc)
 
-    raise ScoreError(f"unparseable reply after 2 attempts: {last_error}")
+    msg = (
+        f"unparseable reply after 2 attempts "
+        f"(raw_len={len(last_raw)}, raw_head={last_raw[:200]!r})"
+    )
+    raise ScoreError(msg)
+
+
+def score_role_with_raw(ad_text: str) -> tuple[dict, str]:
+    """Like score_role() but also returns the raw LLM reply for diagnostics."""
+    prompt = _build_prompt(ad_text)
+    llm = make_scoring_llm()
+
+    last_raw: str = ""
+    for attempt in range(2):
+        raw = ""
+        try:
+            result, raw = _score_attempt(llm, prompt)
+            return result, raw
+        except ScoreError as exc:
+            last_raw = raw
+            logger.warning(
+                "score_role attempt %d: %s (raw_len=%d, has_fence=%s)",
+                attempt + 1,
+                exc,
+                len(last_raw),
+                last_raw.strip().startswith("```") if last_raw else False,
+            )
+        except Exception as exc:
+            last_raw = raw if raw else ""
+            logger.warning("score_role attempt %d: %s", attempt + 1, exc)
+
+    msg = (
+        f"unparseable reply after 2 attempts "
+        f"(raw_len={len(last_raw)}, raw_head={last_raw[:200]!r})"
+    )
+    raise ScoreError(msg)

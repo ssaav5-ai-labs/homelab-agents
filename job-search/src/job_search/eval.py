@@ -6,6 +6,10 @@ AI score, difference) plus the top-three overlap.
 
 Roles whose scoring raises ``ScoreError`` are shown as ``ERR`` and
 excluded from the top-three comparison.
+
+With ``--explain``, prints per-role diagnostics (reply length, code-fence
+status, JSON keys, raw score value + type) — no ad text, no why text, no
+CV, no key.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ import re
 import sys
 from pathlib import Path
 
-from .score import ScoreError, score_role
+from .score import ScoreError, _extract_json, score_role_with_raw
 
 logger = logging.getLogger("job-search")
 
@@ -61,6 +65,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to the career-vault repo root (uses VAULT_READ_ROOT if unset).",
     )
     parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="Print per-role diagnostics: reply length, code-fence, JSON keys, raw score type.",
+    )
+    parser.add_argument(
         "rated",
         nargs="?",
         default="job-search/evals/rated.md",
@@ -70,7 +79,9 @@ def main(argv: list[str] | None = None) -> int:
 
     import os
 
-    vault_root = args.vault_path or os.environ.get("VAULT_READ_ROOT") or "/workspace/career-vault"
+    vault_root = (
+        args.vault_path or os.environ.get("VAULT_READ_ROOT") or "/workspace/career-vault"
+    )
     rated_path = Path(vault_root) / args.rated
 
     if not rated_path.exists():
@@ -84,8 +95,9 @@ def main(argv: list[str] | None = None) -> int:
     for num, user, ad, _link in roles:
         sys.stdout.write(f"{num}.")
         sys.stdout.flush()
+        raw_reply = ""
         try:
-            result = score_role(ad)
+            result, raw_reply = score_role_with_raw(ad)
             ai = int(result["score"])
         except ScoreError as exc:
             logger.error("role %s: %s", num, exc)
@@ -98,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.flush()
             ai = exc
         scores.append((num, user, ai))
+        if args.explain and raw_reply:
+            _print_explain(num, raw_reply)
     print()
 
     print(f"{'#':<4} {'You':>5} {'AI':>5} {'Δ':>5}")
@@ -122,6 +136,27 @@ def main(argv: list[str] | None = None) -> int:
     print(f"AI  top 3:  {sorted(ai_top3)}")
     print(f"Overlap:    {sorted(overlap)} ({len(overlap)}/3)")
     return 0
+
+
+def _print_explain(num: str, raw: str) -> None:
+    """Emit one diagnostic line per role."""
+    raw = raw.strip()
+    has_fence = raw.startswith("```")
+    data = _extract_json(raw)
+    if data and isinstance(data, dict):
+        keys = sorted(data.keys())
+        score_val = data.get("score")
+        score_type = type(score_val).__name__
+    else:
+        keys = []
+        score_val = None
+        score_type = "missing"
+    fence_note = "(fenced)" if has_fence else "(unfenced)"
+    print(
+        f"  [{num}] len={len(raw)} {fence_note} keys={keys} "
+        f"score={score_val!r} ({score_type})",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":
