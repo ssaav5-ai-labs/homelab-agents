@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import time
 
-from .llm import make_scoring_llm
+import litellm
+
+from .llm import GATEWAY_HEADERS
 from .vault import read_profile
 
 logger = logging.getLogger("job-search")
@@ -176,63 +180,112 @@ def _compute_score(
     return score
 
 
-def _call_llm(llm, prompt: str) -> str:
-    result = llm.call([{"role": "user", "content": prompt}])
-    if isinstance(result, dict):
-        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if content:
-            return str(content)
-        return json.dumps(result)
-    return str(result)
+def _call_llm(prompt: str, attempt: int = 1) -> tuple[str, dict]:
+    """Call the gateway directly. Returns (content, diagnostics)."""
+    base = os.environ["LAB_GATEWAY_URL"].rstrip("/")
+    key = os.environ["JOBS_GATEWAY_KEY"]
+    diag: dict = {"prompt_len": len(prompt), "finish_reason": None, "completion_tokens": None,
+                  "reasoning_tokens": None, "http_status": None}
+
+    resp = litellm.completion(
+        model="openai/jobs-fast",
+        messages=[{"role": "user", "content": prompt}],
+        api_base=f"{base}/v1",
+        api_key=key,
+        temperature=0.2,
+        max_tokens=4096,
+        timeout=180,
+        response_format={"type": "json_object"},
+        extra_headers=GATEWAY_HEADERS,
+    )
+
+    diag["http_status"] = 200
+    content = ""
+    if resp and hasattr(resp, "choices") and resp.choices:
+        msg = resp.choices[0].message
+        content = getattr(msg, "content", "") or ""
+        finish = getattr(resp.choices[0], "finish_reason", None)
+        diag["finish_reason"] = finish
+
+    usage = getattr(resp, "usage", None) or getattr(resp, "model_extra", {}).get("usage")
+    if usage:
+        diag["completion_tokens"] = getattr(usage, "completion_tokens", None)
+        rt = getattr(usage, "completion_tokens_details", None)
+        if rt and hasattr(rt, "reasoning_tokens"):
+            diag["reasoning_tokens"] = rt.reasoning_tokens
+        elif isinstance(rt, dict) and "reasoning_tokens" in rt:
+            diag["reasoning_tokens"] = rt["reasoning_tokens"]
+
+    return content, diag
+
+
+def _llm_call_with_backoff(prompt: str) -> tuple[str, dict]:
+    last_diag = {}
+    for attempt in range(1, 4):
+        try:
+            content, diag = _call_llm(prompt, attempt)
+            logger.debug("llm attempt %d: finish=%s compl=%s reasoning=%s content_len=%d",
+                         attempt, diag.get("finish_reason"), diag.get("completion_tokens"),
+                         diag.get("reasoning_tokens"), len(content))
+            if content.strip():
+                return content, diag
+            logger.warning("llm attempt %d: empty content (finish=%s, compl=%s, "
+                           "reasoning=%s, http=%s)",
+                           attempt, diag.get("finish_reason"), diag.get("completion_tokens"),
+                           diag.get("reasoning_tokens"), diag.get("http_status"))
+            last_diag = diag
+            time.sleep(min(2 ** attempt, 10))
+        except litellm.exceptions.RateLimitError:
+            logger.warning("llm attempt %d: rate limited, backing off", attempt)
+            time.sleep(min(4 ** attempt, 30))
+            last_diag = {"finish_reason": "rate_limited"}
+        except Exception as exc:
+            logger.warning("llm attempt %d: %s", attempt, exc)
+            last_diag = {"finish_reason": str(type(exc).__name__)}
+            time.sleep(min(2 ** attempt, 10))
+    return "", last_diag
 
 
 def score_role(ad_text: str, title: str = "") -> dict:
     profile = read_profile()
     prompt = CRITERIA_PROMPT.format(ad_text=ad_text[:AD_CAP])
 
-    llm = make_scoring_llm()
-
-    last_raw: str = ""
     for attempt in range(2):
-        try:
-            raw = _call_llm(llm, prompt)
-            last_raw = raw
+        raw, diag = _llm_call_with_backoff(prompt)
+        if raw:
             data = _extract_json(raw)
-            if not data or not isinstance(data, dict):
-                raise ScoreError("no JSON object in reply")
-
-            criteria = data.get("criteria", {})
-            if not isinstance(criteria, dict):
-                raise ScoreError("missing criteria object")
-
-            dealbreakers = data.get("dealbreakers", {})
-            if not isinstance(dealbreakers, dict):
-                dealbreakers = {}
-
-            score = _compute_score(criteria, dealbreakers, title, profile)
-
-            return {
-                "score": score,
-                "why": str(data.get("why", "")),
-                "gaps": str(data.get("gaps", "")),
-                "must_ask": str(data.get("must_ask", "")),
-                "criteria": criteria,
-                "dealbreakers": dealbreakers,
-                "seniority_fit": title,
-            }
-        except ScoreError as exc:
+            if data and isinstance(data, dict):
+                criteria = data.get("criteria", {})
+                if isinstance(criteria, dict):
+                    dealbreakers = data.get("dealbreakers", {}) or {}
+                    score = _compute_score(dict(criteria), dict(dealbreakers), title, profile)
+                    return {
+                        "score": score,
+                        "why": str(data.get("why", "")),
+                        "gaps": str(data.get("gaps", "")),
+                        "must_ask": str(data.get("must_ask", "")),
+                        "criteria": dict(criteria),
+                        "dealbreakers": dict(dealbreakers),
+                        "seniority_fit": title,
+                    }
             logger.warning(
-                "score_role attempt %d: %s (raw_len=%d)",
-                attempt + 1,
-                exc,
-                len(last_raw),
+                "score_role attempt %d: invalid JSON (raw_len=%d, finish=%s, "
+                "completion_tokens=%s, reasoning_tokens=%s)",
+                attempt + 1, len(raw), diag.get("finish_reason"),
+                diag.get("completion_tokens"), diag.get("reasoning_tokens"),
             )
-        except Exception as exc:
-            logger.warning("score_role attempt %d: %s", attempt + 1, exc)
+        else:
+            logger.warning(
+                "score_role attempt %d: empty content (finish=%s, completion_tokens=%s, "
+                "reasoning_tokens=%s, http=%s)",
+                attempt + 1, diag.get("finish_reason"), diag.get("completion_tokens"),
+                diag.get("reasoning_tokens"), diag.get("http_status"),
+            )
 
     msg = (
         f"unparseable reply after 2 attempts "
-        f"(raw_len={len(last_raw)}, raw_head={last_raw[:200]!r})"
+        f"(finish={diag.get('finish_reason')}, "
+        f"completion_tokens={diag.get('completion_tokens')})"
     )
     raise ScoreError(msg)
 
@@ -241,49 +294,41 @@ def score_role_with_raw(ad_text: str, title: str = "") -> tuple[dict, str]:
     profile = read_profile()
     prompt = CRITERIA_PROMPT.format(ad_text=ad_text[:AD_CAP])
 
-    llm = make_scoring_llm()
-
-    last_raw: str = ""
     for attempt in range(2):
-        raw = ""
-        try:
-            raw = _call_llm(llm, prompt)
-            last_raw = raw
+        raw, diag = _llm_call_with_backoff(prompt)
+        if raw:
             data = _extract_json(raw)
-            if not data or not isinstance(data, dict):
-                raise ScoreError("no JSON object in reply")
-
-            criteria = data.get("criteria", {})
-            if not isinstance(criteria, dict):
-                raise ScoreError("missing criteria object")
-
-            dealbreakers = data.get("dealbreakers", {})
-            if not isinstance(dealbreakers, dict):
-                dealbreakers = {}
-
-            score = _compute_score(criteria, dealbreakers, title, profile)
-
-            return {
-                "score": score,
-                "why": str(data.get("why", "")),
-                "gaps": str(data.get("gaps", "")),
-                "must_ask": str(data.get("must_ask", "")),
-                "criteria": criteria,
-                "dealbreakers": dealbreakers,
-                "seniority_fit": title,
-            }, raw
-        except ScoreError as exc:
+            if data and isinstance(data, dict):
+                criteria = data.get("criteria", {})
+                if isinstance(criteria, dict):
+                    dealbreakers = data.get("dealbreakers", {}) or {}
+                    score = _compute_score(dict(criteria), dict(dealbreakers), title, profile)
+                    return {
+                        "score": score,
+                        "why": str(data.get("why", "")),
+                        "gaps": str(data.get("gaps", "")),
+                        "must_ask": str(data.get("must_ask", "")),
+                        "criteria": dict(criteria),
+                        "dealbreakers": dict(dealbreakers),
+                        "seniority_fit": title,
+                    }, raw
             logger.warning(
-                "score_role attempt %d: %s (raw_len=%d)",
-                attempt + 1,
-                exc,
-                len(raw),
+                "score_role attempt %d: invalid JSON (raw_len=%d, finish=%s, "
+                "completion_tokens=%s, reasoning_tokens=%s)",
+                attempt + 1, len(raw), diag.get("finish_reason"),
+                diag.get("completion_tokens"), diag.get("reasoning_tokens"),
             )
-        except Exception as exc:
-            logger.warning("score_role attempt %d: %s", attempt + 1, exc)
+        else:
+            logger.warning(
+                "score_role attempt %d: empty content (finish=%s, completion_tokens=%s, "
+                "reasoning_tokens=%s, http=%s)",
+                attempt + 1, diag.get("finish_reason"), diag.get("completion_tokens"),
+                diag.get("reasoning_tokens"), diag.get("http_status"),
+            )
 
     msg = (
         f"unparseable reply after 2 attempts "
-        f"(raw_len={len(last_raw)}, raw_head={last_raw[:200]!r})"
+        f"(finish={diag.get('finish_reason')}, "
+        f"completion_tokens={diag.get('completion_tokens')})"
     )
     raise ScoreError(msg)
