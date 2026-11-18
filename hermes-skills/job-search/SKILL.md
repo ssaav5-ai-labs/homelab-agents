@@ -1,7 +1,7 @@
 ---
 name: job-search
 description: "Score a role or job ad, draft an application, mark a role applied or rejected, list today's matches, or summarise the pipeline — through the job-search MCP tools. Use whenever the operator says score, draft (e.g. 'draft 1'), applied or rejected (e.g. 'applied 3'), matches, or pipeline, or posts in #job-search."
-version: 0.2.2
+version: 0.2.3
 license: MIT
 metadata:
   hermes:
@@ -26,7 +26,7 @@ The tools are:
 | `score_role` | read | Scores a pasted role (ad text or ATS URL) against the profile. |
 | `todays_matches` | read | Returns today's matches with scores. |
 | `pipeline_summary` | read | Returns a pipeline-stage summary with counts. |
-| `draft_application` | write | Drafts a cover letter / application for a given role. |
+| `draft_application` | write | Drafts a cover letter / application for a given role (optionally passing `company`, `title`, `score` from a prior score). |
 | `set_status` | write | Sets the pipeline status for a role (e.g. `applied`, `rejected`). |
 
 **Write tools need approval.** The `draft_application` and `set_status` tools require
@@ -38,8 +38,14 @@ them (`cron_mode: deny`).
 When the operator says something in the thread like:
 
 - **"score this: <ad text or ATS URL>"** → call `score_role(text_or_url=...)` and post the
-  JSON card (score, why, gaps, must_ask) as a short, readable summary.
+  JSON card (score, why, gaps, must_ask) as a short, readable summary. The card also
+  includes `company` and `title`.
 - **"score this role"** / **"score <anything>"** → call `score_role(text_or_url=...)`.
+- **"draft it"** / **"draft this"** (right after scoring a pasted role) → call
+  `draft_application(role_id_or_text=<the same ad text or URL>, company=<card company>,
+  title=<card title>, score=<card score>)`, passing through the `company`, `title` and
+  `score` from the most recent `score_role` result. Omit any of them that are empty and
+  the server falls back to deriving them.
 - **"draft 2"** → call `draft_application` with the second role from the most recent
   match list. If there is no match list yet (no digest today), reply
   "No digest yet, paste the role and I'll score it" — do not write a draft yourself.
