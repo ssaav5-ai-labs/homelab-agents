@@ -13,9 +13,11 @@ import email.policy
 import imaplib
 import logging
 import os
+import socket
 import ssl
 import sys
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 from .parse import parse_alert as _parse_alert
 from .rules import apply_rules
@@ -34,18 +36,55 @@ def _allowed_senders() -> set[str]:
     return {a.strip().lower() for a in raw.split(",") if a.strip()}
 
 
-def _imap_connect() -> imaplib.IMAP4_SSL:
+def _connect_via_proxy(
+    proxy_url: str, host: str, port: int, ctx: ssl.SSLContext
+) -> ssl.SSLSocket:
+    """Open a CONNECT tunnel through an HTTP proxy and wrap it in TLS."""
+    pr = urlparse(proxy_url)
+    if pr.scheme != "http":
+        raise ValueError(f"IMAP_PROXY must be an http:// URL, got {proxy_url!r}")
+    sock = socket.create_connection((pr.hostname, pr.port or 3128), timeout=30)
+    sock.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise ConnectionError("proxy closed during CONNECT")
+        buf += chunk
+    status = buf.split(b"\r\n", 1)[0].decode(errors="replace")
+    if status.split()[1] != "200":
+        raise ConnectionError(f"proxy CONNECT refused: {status}")
+    return ctx.wrap_socket(sock, server_hostname=host)
+
+
+class _ProxyIMAP4(imaplib.IMAP4):
+    """IMAP4 over a pre-built CONNECT tunnel; ``_create_socket`` returns the TLS socket."""
+
+    def __init__(self, host: str, port: int, tunnel_socket: ssl.SSLSocket, timeout: int = 30):
+        self._tunnel_socket = tunnel_socket
+        super().__init__(host, port, timeout=timeout)
+
+    def _create_socket(self, timeout) -> ssl.SSLSocket:
+        return self._tunnel_socket
+
+
+def _imap_connect() -> imaplib.IMAP4:
     host = os.environ["IMAP_HOST"]
     user = os.environ["IMAP_USER"]
     password = os.environ["IMAP_APP_PASSWORD"]
 
     ctx = ssl.create_default_context()
-    conn = imaplib.IMAP4_SSL(host, 993, ssl_context=ctx)
+    proxy = os.environ.get("IMAP_PROXY")
+    if proxy:
+        tunnel = _connect_via_proxy(proxy, host, 993, ctx)
+        conn = _ProxyIMAP4(host, 993, tunnel, timeout=30)
+    else:
+        conn = imaplib.IMAP4_SSL(host, 993, ssl_context=ctx)
     conn.login(user, password)
     return conn
 
 
-def _fetch_new_alerts(conn: imaplib.IMAP4_SSL) -> list[bytes]:
+def _fetch_new_alerts(conn: imaplib.IMAP4) -> list[bytes]:
     conn.select("INBOX", readonly=True)
     typ, data = conn.search(None, "UNSEEN")
     if typ != "OK":
