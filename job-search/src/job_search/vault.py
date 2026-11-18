@@ -13,6 +13,7 @@ import logging
 import os
 import shlex
 import subprocess
+from datetime import date, datetime
 from pathlib import Path
 
 import yaml
@@ -25,6 +26,25 @@ VAULT_WRITE_KEY = Path(os.environ.get("VAULT_WRITE_KEY", "/etc/vault-keys/rw"))
 JOBS_PREFIX = "job-search"
 
 SAFE_PATH_PREFIX = f"{JOBS_PREFIX}/"
+
+DATE_FIELDS = {"applied", "next_action_date", "drafted"}
+
+
+def to_date(value):
+    """Normalize a frontmatter date to ``datetime.date`` (or None).
+
+    YAML gives an unquoted ``2026-11-18`` as ``datetime.date`` and a quoted
+    ``"2026-11-18"`` as ``str``; both must compare and sort the same way.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        return date.fromisoformat(value.strip())
+    return value
 
 
 def _sha256_file(path: Path) -> str:
@@ -116,6 +136,9 @@ def read_roles() -> list[dict]:
     for f in sorted(roles_dir.glob("*.md")):
         fm = _frontmatter(f)
         fm["_id"] = f.stem
+        for key in DATE_FIELDS:
+            if key in fm:
+                fm[key] = to_date(fm[key])
         roles.append(fm)
     return roles
 
@@ -175,25 +198,34 @@ def _prepare_work_clone() -> Path:
 def write_role(role_id: str, content: str) -> str:
     """Write a role file under ``job-search/roles/<role_id>.md``."""
     path = f"{SAFE_PATH_PREFIX}roles/{role_id}.md"
-    return _write_vault(path, content, f"job-search: add role {role_id}")
+    return _write_vault([(path, content)], f"job-search: add role {role_id}")
 
 
 def write_draft(role_id: str, content: str) -> str:
     """Write a draft file under ``job-search/drafts/<role_id>.md``."""
     path = f"{SAFE_PATH_PREFIX}drafts/{role_id}.md"
-    return _write_vault(path, content, f"job-search: draft {role_id}")
+    return _write_vault([(path, content)], f"job-search: draft {role_id}")
+
+
+def write_draft_and_role(role_id: str, draft_content: str, role_content: str) -> str:
+    """Write the draft and its role tracker entry in one commit."""
+    items = [
+        (f"{SAFE_PATH_PREFIX}drafts/{role_id}.md", draft_content),
+        (f"{SAFE_PATH_PREFIX}roles/{role_id}.md", role_content),
+    ]
+    return _write_vault(items, f"job-search: draft {role_id}")
 
 
 def update_role_status(role_id: str, content: str, status: str) -> str:
     """Update a role's status."""
     path = f"{SAFE_PATH_PREFIX}roles/{role_id}.md"
-    return _write_vault(path, content, f"job-search: {status} {role_id}")
+    return _write_vault([(path, content)], f"job-search: {status} {role_id}")
 
 
 def write_digest(date_str: str, content: str) -> str:
     """Write a daily digest."""
     path = f"{SAFE_PATH_PREFIX}digests/{date_str}.md"
-    return _write_vault(path, content, f"job-search: digest {date_str}")
+    return _write_vault([(path, content)], f"job-search: digest {date_str}")
 
 
 def _validate_path(path: str) -> None:
@@ -204,17 +236,23 @@ def _validate_path(path: str) -> None:
         raise ValueError(f"path {path} escapes {SAFE_PATH_PREFIX}")
 
 
-def _write_vault(repo_path: str, content: str, commit_msg: str) -> str:
-    _validate_path(repo_path)
+def _write_vault(items: list[tuple[str, str]], commit_msg: str) -> str:
+    for repo_path, _ in items:
+        _validate_path(repo_path)
 
     work = _prepare_work_clone()
     env = _git_env()
 
-    file_path = work / repo_path
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(content)
+    def _write_files() -> None:
+        for repo_path, content in items:
+            file_path = work / repo_path
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content)
 
-    _run_git(work, ["add", repo_path], env)
+    _write_files()
+
+    for repo_path, _ in items:
+        _run_git(work, ["add", repo_path], env)
     _run_git(work, ["commit", "-m", commit_msg], env)
 
     for attempt in range(2):
@@ -226,10 +264,9 @@ def _write_vault(repo_path: str, content: str, commit_msg: str) -> str:
                 logger.warning("push conflict, retrying")
                 _run_git(work, ["fetch", "origin"], env)
                 _run_git(work, ["reset", "--hard", "origin/main"], env)
-                file_path = work / repo_path
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.write_text(content)
-                _run_git(work, ["add", repo_path], env)
+                _write_files()
+                for repo_path, _ in items:
+                    _run_git(work, ["add", repo_path], env)
                 _run_git(work, ["commit", "-m", commit_msg], env)
             else:
                 raise

@@ -8,13 +8,17 @@ for ``Allow once``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import time
+import unicodedata
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -30,7 +34,7 @@ from .vault import (
     read_digest,
     read_roles,
     update_role_status,
-    write_draft,
+    write_draft_and_role,
 )
 
 logger = logging.getLogger("job-search")
@@ -89,6 +93,110 @@ def _resolve_ad_text(text_or_url: str) -> str:
     return text_or_url
 
 
+_SLUG_MAX = 60
+_ROLE_DESC_CAP = 12_000
+
+
+def _normalize_text(text: str) -> str:
+    return " ".join(text.split()).strip().lower()
+
+
+def _slugify(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii", "ignore")
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-")
+
+
+def _clean_field(value: str) -> str:
+    value = re.sub(r"^\s*#{1,6}\s*", "", value)
+    value = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", value)
+    return value.strip()
+
+
+def _company_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    parts = [p for p in parsed.path.split("/") if p]
+    if host == "boards-api.greenhouse.io" and len(parts) >= 3 and parts[1] == "boards":
+        return parts[2]
+    if host == "api.lever.co" and len(parts) >= 3 and parts[1] == "postings":
+        return parts[2]
+    if host == "api.ashbyhq.com" and "job-board" in parts:
+        idx = parts.index("job-board")
+        if idx + 1 < len(parts):
+            return parts[idx + 1]
+    return ""
+
+
+def _classify_url(url: str) -> tuple[str, str]:
+    """Return ``(source, source_id)`` for an ATS URL, or ``("", "")``."""
+    if not url:
+        return "", ""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    parts = [p for p in parsed.path.split("/") if p]
+    if host == "boards-api.greenhouse.io":
+        return "greenhouse", parts[-1] if parts else ""
+    if host == "api.lever.co":
+        return "lever", parts[-1] if parts else ""
+    if host == "api.ashbyhq.com":
+        return "ashby", parts[-1] if parts else ""
+    return host, ""
+
+
+def _extract_company_title(ad_text: str, url: str = "") -> tuple[str, str]:
+    """Best-effort company/title extraction from an ad (or its URL)."""
+    company = title = ""
+    lines = [ln.strip() for ln in ad_text.splitlines() if ln.strip()]
+
+    for ln in lines:
+        m = re.search(r"\b(?:title|position|role)\s*:\s*(.{1,120})$", ln, re.IGNORECASE)
+        if m and not title:
+            title = m.group(1).strip()
+        m = re.search(
+            r"\b(?:company|employer|organization|organisation)\s*:\s*(.{1,120})$",
+            ln,
+            re.IGNORECASE,
+        )
+        if m and not company:
+            company = m.group(1).strip()
+    if company and title:
+        return _clean_field(company), _clean_field(title)
+
+    for ln in lines[:10]:
+        m = re.match(r"^(.{3,120}?)\s+(?:at|@)\s+([A-Za-z0-9][\w&.,'() -]{1,60})$", ln)
+        if m:
+            return _clean_field(m.group(2)), _clean_field(m.group(1))
+
+    if not title and lines and len(lines[0]) <= 120:
+        first = lines[0].lower()
+        if not first.startswith(
+            ("http", "about ", "the role", "job description", "role description")
+        ):
+            title = lines[0]
+
+    if not company and url:
+        company = _company_from_url(url)
+
+    return _clean_field(company), _clean_field(title)
+
+
+def derive_role_id(ad_text: str, url: str = "") -> str:
+    """Derive a stable, filesystem-safe role ID: ``<company>-<title>`` slug
+    (max 60 chars) plus an 8-char hash of the normalized text."""
+    company, title = _extract_company_title(ad_text, url)
+    slug = _slugify(f"{company} {title}").strip("-")
+    slug = slug[:_SLUG_MAX].strip("-")
+    digest = hashlib.blake2b(_normalize_text(ad_text).encode(), digest_size=4).hexdigest()
+    return f"{slug}-{digest}" if slug else digest
+
+
+def _q(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
 @mcp.tool(annotations=READ_ONLY)
 async def score_role(text_or_url: str) -> str:
     """Score a role against the profile. Accepts ad text or a public ATS job URL.
@@ -128,12 +236,12 @@ async def pipeline_summary() -> str:
 
     by_status: dict[str, list[dict]] = {}
     overdue: list[dict] = []
-    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).date()
 
     for role in roles:
         status = role.get("status", "unknown")
         by_status.setdefault(status, []).append(role)
-        next_date = role.get("next_action_date", "")
+        next_date = role.get("next_action_date")
         if next_date and next_date < today:
             overdue.append(role)
 
@@ -156,7 +264,7 @@ async def pipeline_summary() -> str:
 async def draft_application(role_id_or_text: str) -> str:
     """Draft a CV summary and cover note for a role. Accepts ad text or a role ID.
 
-    Writes to career-vault/job-search/drafts/<id>.md.
+    Writes career-vault/job-search/drafts/<id>.md and roles/<id>.md.
     """
     return await _run_guarded(
         "draft_application",
@@ -165,7 +273,8 @@ async def draft_application(role_id_or_text: str) -> str:
 
 
 def _draft_result(role_id_or_text: str) -> str:
-    import hashlib
+    raw_input = role_id_or_text.strip()
+    url = raw_input if raw_input.startswith(("http://", "https://")) else ""
 
     ad = _resolve_ad_text(role_id_or_text)
     if ad.startswith("could not fetch") or ad.startswith("LinkedIn links cannot"):
@@ -175,29 +284,56 @@ def _draft_result(role_id_or_text: str) -> str:
     if result.get("rejected"):
         return f"draft rejected: {result.get('reason', '')}"
 
-    role_id = role_id_or_text.strip()
-    if not role_id.startswith(("http://", "https://")):
-        pass
-    else:
-        role_id = hashlib.blake2b(ad[:200].encode(), digest_size=8).hexdigest()
+    role_id = derive_role_id(ad, url)
+    company, title = _extract_company_title(ad, url)
+    company = company or "unknown"
+    title = title or "unknown"
 
-    draft_content = f"""---
-role_id: {role_id}
-cv_variant: {result.get('cv_variant', 'general')}
-drafted: {datetime.now(UTC).strftime('%Y-%m-%d')}
----
+    variant = result.get("cv_variant", "general")
+    drafted = datetime.now(UTC).strftime("%Y-%m-%d")
 
-# Draft for role {role_id}
+    draft_content = (
+        f"---\n"
+        f"role_id: {role_id}\n"
+        f"company: {_q(company)}\n"
+        f"title: {_q(title)}\n"
+        f"cv_variant: {variant}\n"
+        f"drafted: {drafted}\n"
+        f"---\n\n"
+        f"# Draft for {title} at {company}\n\n"
+        f"## CV to attach\n\n"
+        f"{result.get('cv_file', '')}\n\n"
+        f"{result.get('draft', '')}\n"
+    )
 
-## CV to attach
+    source, source_id = _classify_url(url)
+    if not url:
+        source = "manual"
+    role_content = (
+        f"---\n"
+        f"company: {_q(company)}\n"
+        f"title: {_q(title)}\n"
+        f"source: {_q(source)}\n"
+        f"source_id: {_q(source_id)}\n"
+        f"url: {_q(url)}\n"
+        f"score: 0\n"
+        f"cv_variant: {variant}\n"
+        f"status: drafted\n"
+        f"applied: null\n"
+        f"next_action: review\n"
+        f"next_action_date: null\n"
+        f"---\n\n"
+        f"# {title} at {company}\n\n"
+        f"## Role description\n\n"
+        f"{ad[:_ROLE_DESC_CAP]}\n"
+    )
 
-{result.get('cv_file', '')}
+    write_draft_and_role(role_id, draft_content, role_content)
 
-{result.get('draft', '')}
-"""
-    write_draft(role_id, draft_content)
-
-    return f"draft written to job-search/drafts/{role_id}.md"
+    return (
+        f"draft written to job-search/drafts/{role_id}.md "
+        f"and role job-search/roles/{role_id}.md"
+    )
 
 
 @mcp.tool(annotations=WRITE_TOOL)
