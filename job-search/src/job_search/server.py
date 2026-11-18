@@ -64,7 +64,7 @@ async def _run_guarded(name: str, fn: Any) -> str:
     await _busy.acquire()
     start = time.monotonic()
     try:
-        result = await fn() if asyncio.iscoroutinefunction(fn) else fn()
+        result = await fn() if asyncio.iscoroutinefunction(fn) else await asyncio.to_thread(fn)
         logger.info("call=%s duration=%.1fs outcome=ok", name, time.monotonic() - start)
         return result
     except Exception as exc:  # noqa: BLE001
