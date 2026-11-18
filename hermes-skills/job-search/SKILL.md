@@ -1,7 +1,7 @@
 ---
 name: job-search
 description: "Score a role or job ad, draft an application, mark a role applied or rejected, list today's matches, or summarise the pipeline — through the job-search MCP tools. Use whenever the operator says score, draft (e.g. 'draft 1'), applied or rejected (e.g. 'applied 3'), matches, or pipeline, or posts in #job-search."
-version: 0.2.1
+version: 0.2.2
 license: MIT
 metadata:
   hermes:
@@ -72,3 +72,7 @@ line "No new matches today" — never treat it as an error.
   no alternatives, no offering to do the work yourself.
 - The operator's plain words are the only source of truth for status changes — never
   guess a status from context.
+- Never read, quote, or reproduce the job-search server's source code or anything it
+  logs — the tools are the only interface, and only their outputs are for the operator.
+- Never ask the operator to paste their CV, profile, or any personal data into the chat.
+  That data lives in the private career-vault and is read only by the tools.
