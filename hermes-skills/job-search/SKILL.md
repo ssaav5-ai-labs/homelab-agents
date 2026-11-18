@@ -1,7 +1,7 @@
 ---
 name: job-search
-description: "Interact with the job-search pipeline: list today's matches, summarise the pipeline, draft an application, or update a role's status. Use when the operator talks about jobs, applications, drafting, or pipeline status."
-version: 0.1.0
+description: "Score a role or job ad, draft an application, mark a role applied or rejected, list today's matches, or summarise the pipeline — through the job-search MCP tools. Use whenever the operator says score, draft (e.g. 'draft 1'), applied or rejected (e.g. 'applied 3'), matches, or pipeline, or posts in #job-search."
+version: 0.2.0
 license: MIT
 metadata:
   hermes:
@@ -12,6 +12,12 @@ metadata:
 # job-search
 
 Read from and write to the job-search MCP server (`job_search` in managed config).
+
+**Always use the job_search tools.** Never score a role, draft a cover letter, or
+invent matches or pipeline stages on your own — every score, draft and status change
+must come from the MCP tools. If a tool errors or the server is unreachable, say so in
+one line and stop; do not improvise.
+
 The tools are:
 
 | Tool | Read/write | What it does |
@@ -32,8 +38,10 @@ When the operator says something in the thread like:
 
 - **"score this: <ad text or ATS URL>"** → call `score_role(text_or_url=...)` and post the
   JSON card (score, why, gaps, must_ask) as a short, readable summary.
+- **"score this role"** / **"score <anything>"** → call `score_role(text_or_url=...)`.
 - **"draft 2"** → call `draft_application` with the second role from the most recent
-  match list. If unclear, ask which role.
+  match list. If there is no match list yet (no digest today), reply
+  "No digest yet, paste the role and I'll score it" — do not write a draft yourself.
 - **"draft <role_id>"** or **"draft for <name>"** → call `draft_application(role_id_or_text=...)`
 - **"applied 3"** → call `set_status(role_id=<third from list>, status="applied")`
 - **"applied <role_id>"** → call `set_status(role_id=..., status="applied")`
@@ -58,6 +66,7 @@ line "No new matches today" — never treat it as an error.
 ## Limits
 
 - Never invent matches, scores, or pipeline stages. Only use what the tools return.
-- If the MCP server is unreachable, say so and stop.
+- Never score a role or draft a cover letter yourself — always call the tools.
+- If a tool errors or the MCP server is unreachable, say so in one line and stop.
 - The operator's plain words are the only source of truth for status changes — never
   guess a status from context.
