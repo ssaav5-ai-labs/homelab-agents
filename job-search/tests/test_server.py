@@ -62,6 +62,36 @@ def test_busy_gate():
     asyncio.run(_test())
 
 
+def test_healthz_answers_during_slow_tool_call():
+    import time
+
+    import httpx
+
+    from job_search.server import _run_guarded, app
+
+    async def _test():
+        def slow_fn():
+            time.sleep(0.5)
+            return "done"
+
+        task = asyncio.create_task(_run_guarded("slow", slow_fn))
+        await asyncio.sleep(0.05)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            start = time.monotonic()
+            resp = await client.get("/healthz")
+            elapsed = time.monotonic() - start
+
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        assert elapsed < 0.3, "event loop blocked while sync tool ran"
+
+        assert await task == "done"
+
+    asyncio.run(_test())
+
+
 def test_resolve_ad_text_with_text():
     from job_search.server import _resolve_ad_text
     result = _resolve_ad_text("a plain text job ad")
