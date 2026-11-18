@@ -145,6 +145,45 @@ def test_derive_role_id_stable():
     assert derive_role_id(ad) == derive_role_id(ad)
 
 
+def test_derive_role_id_explicit_company_title():
+    from job_search.server import derive_role_id
+
+    ad = "About the role\n\nJoin our team and lead the AI platform."
+    role_id = derive_role_id(
+        ad, company="Finastra", title="Director of AI and Machine Learning"
+    )
+    assert role_id.startswith("finastra-director-of-ai-and-machine-learning-")
+
+
+def test_derive_role_id_no_company_title_returns_bare_hash():
+    import re
+
+    from job_search.server import derive_role_id
+
+    ad = "About the role\n\nJoin our amazing team and do great things."
+    role_id = derive_role_id(ad)
+    assert re.fullmatch(r"[0-9a-f]{8}", role_id)
+
+
+def test_score_result_includes_company_title(monkeypatch):
+    import json
+
+    from job_search import server as srv
+
+    ad = "Director of Platform Engineering at Acme Corp\n\nSome description."
+    monkeypatch.setattr(srv, "_resolve_ad_text", lambda t: ad)
+    monkeypatch.setattr(
+        srv,
+        "_score_role",
+        lambda ad: {"score": 72, "why": "good fit", "gaps": "", "must_ask": ""},
+    )
+
+    data = json.loads(srv._score_result("director role at acme"))
+    assert data["company"] == "Acme Corp"
+    assert data["title"] == "Director of Platform Engineering"
+    assert data["score"] == 72
+
+
 def test_draft_result_pasted_text_derives_slug(monkeypatch):
     import re
 
@@ -198,6 +237,31 @@ def test_draft_result_url_derives_slug(monkeypatch):
     assert "status: drafted" in captured["role"]
     assert "source: \"lever\"" in captured["role"]
     assert "url: \"https://api.lever.co/v0/postings/acmecorp/abc123\"" in captured["role"]
+
+
+def test_draft_result_uses_passed_company_title_score(monkeypatch):
+    from job_search import server as srv
+
+    ad = "About the role\n\nGeneric description with no company or title."
+    monkeypatch.setattr(srv, "_resolve_ad_text", lambda t: ad)
+    monkeypatch.setattr(
+        srv,
+        "_draft_application",
+        lambda ad: {"cv_variant": "general", "cv_file": "cv/general.md", "draft": "draft text"},
+    )
+    captured = {}
+    monkeypatch.setattr(srv, "write_draft_and_role", _capture_writes(captured))
+
+    srv._draft_result(
+        "the role text",
+        company="Finastra",
+        title="Director of AI and Machine Learning",
+        score=85,
+    )
+    assert captured["role_id"].startswith("finastra-director-of-ai-and-machine-learning-")
+    assert "score: 85" in captured["role"]
+    assert 'company: "Finastra"' in captured["role"]
+    assert 'title: "Director of AI and Machine Learning"' in captured["role"]
 
 
 def test_pipeline_summary_handles_quoted_and_unquoted_dates(monkeypatch, tmp_path):

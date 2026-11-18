@@ -174,6 +174,9 @@ def _git_env() -> dict:
         "-o UserKnownHostsFile=/etc/ssh/known_hosts"
     )
     env["GIT_SSH_COMMAND"] = ssh_cmd
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "safe.directory"
+    env["GIT_CONFIG_VALUE_0"] = str(VAULT_WORK_ROOT)
     env.setdefault("GIT_AUTHOR_NAME", "job-search")
     env.setdefault("GIT_AUTHOR_EMAIL", "job-search@localhost")
     env.setdefault("GIT_COMMITTER_NAME", "job-search")

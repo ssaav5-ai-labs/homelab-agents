@@ -183,10 +183,21 @@ def _extract_company_title(ad_text: str, url: str = "") -> tuple[str, str]:
     return _clean_field(company), _clean_field(title)
 
 
-def derive_role_id(ad_text: str, url: str = "") -> str:
+def _resolve_company_title(
+    ad_text: str, url: str, company: str = "", title: str = ""
+) -> tuple[str, str]:
+    """Resolve company/title: explicit params first, then heuristics, else empty."""
+    if not company or not title:
+        extracted_company, extracted_title = _extract_company_title(ad_text, url)
+        company = company or extracted_company
+        title = title or extracted_title
+    return company, title
+
+
+def derive_role_id(ad_text: str, url: str = "", company: str = "", title: str = "") -> str:
     """Derive a stable, filesystem-safe role ID: ``<company>-<title>`` slug
     (max 60 chars) plus an 8-char hash of the normalized text."""
-    company, title = _extract_company_title(ad_text, url)
+    company, title = _resolve_company_title(ad_text, url, company, title)
     slug = _slugify(f"{company} {title}").strip("-")
     slug = slug[:_SLUG_MAX].strip("-")
     digest = hashlib.blake2b(_normalize_text(ad_text).encode(), digest_size=4).hexdigest()
@@ -214,6 +225,10 @@ def _score_result(text_or_url: str) -> str:
     if ad.startswith("could not fetch") or ad.startswith("LinkedIn links cannot"):
         return ad
     result = _score_role(ad)
+    url = text_or_url.strip() if text_or_url.strip().startswith(("http://", "https://")) else ""
+    company, title = _extract_company_title(ad, url)
+    result["company"] = company
+    result["title"] = title
     return json.dumps(result)
 
 
@@ -261,18 +276,28 @@ async def pipeline_summary() -> str:
 
 
 @mcp.tool(annotations=WRITE_TOOL)
-async def draft_application(role_id_or_text: str) -> str:
+async def draft_application(
+    role_id_or_text: str,
+    company: str = "",
+    title: str = "",
+    score: int = 0,
+) -> str:
     """Draft a CV summary and cover note for a role. Accepts ad text or a role ID.
 
+    Optionally pass company, title and score (e.g. from a score_role result) so
+    the role ID and stored score are exact; otherwise they are derived from the
+    ad and fall back to "unknown"/0.
     Writes career-vault/job-search/drafts/<id>.md and roles/<id>.md.
     """
     return await _run_guarded(
         "draft_application",
-        lambda: _draft_result(role_id_or_text),
+        lambda: _draft_result(role_id_or_text, company, title, score),
     )
 
 
-def _draft_result(role_id_or_text: str) -> str:
+def _draft_result(
+    role_id_or_text: str, company: str = "", title: str = "", score: int = 0
+) -> str:
     raw_input = role_id_or_text.strip()
     url = raw_input if raw_input.startswith(("http://", "https://")) else ""
 
@@ -284,10 +309,10 @@ def _draft_result(role_id_or_text: str) -> str:
     if result.get("rejected"):
         return f"draft rejected: {result.get('reason', '')}"
 
-    role_id = derive_role_id(ad, url)
-    company, title = _extract_company_title(ad, url)
-    company = company or "unknown"
-    title = title or "unknown"
+    resolved_company, resolved_title = _resolve_company_title(ad, url, company, title)
+    role_id = derive_role_id(ad, url, resolved_company, resolved_title)
+    company = resolved_company or "unknown"
+    title = resolved_title or "unknown"
 
     variant = result.get("cv_variant", "general")
     drafted = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -316,7 +341,7 @@ def _draft_result(role_id_or_text: str) -> str:
         f"source: {_q(source)}\n"
         f"source_id: {_q(source_id)}\n"
         f"url: {_q(url)}\n"
-        f"score: 0\n"
+        f"score: {score}\n"
         f"cv_variant: {variant}\n"
         f"status: drafted\n"
         f"applied: null\n"
