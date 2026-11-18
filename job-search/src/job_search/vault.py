@@ -146,10 +146,15 @@ def _git_env() -> dict:
     env = os.environ.copy()
     ssh_cmd = (
         f"ssh -i {VAULT_WRITE_KEY} "
+        "-o IdentitiesOnly=yes "
         "-o StrictHostKeyChecking=yes "
         "-o UserKnownHostsFile=/etc/ssh/known_hosts"
     )
     env["GIT_SSH_COMMAND"] = ssh_cmd
+    env.setdefault("GIT_AUTHOR_NAME", "job-search")
+    env.setdefault("GIT_AUTHOR_EMAIL", "job-search@localhost")
+    env.setdefault("GIT_COMMITTER_NAME", "job-search")
+    env.setdefault("GIT_COMMITTER_EMAIL", "job-search@localhost")
     return env
 
 

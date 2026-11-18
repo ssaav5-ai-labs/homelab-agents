@@ -58,3 +58,8 @@ jobs:
       - name: job-search docker build
         run: docker build -t job-search:ci .
         working-directory: job-search
+
+      - name: job-search image uid check
+        run: |
+          docker run --rm --user 10001:10001 --entrypoint sh job-search:ci -c 'ssh -V 2>&1; id; [ "$(id -un)" = "app" ]'
+        working-directory: job-search

@@ -3,8 +3,10 @@ FROM python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991e
 COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git openssh-client && \
-    rm -rf /var/lib/apt/lists/*
+    git openssh-client passwd && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd -g 10001 app && \
+    useradd -u 10001 -g 10001 -m -d /home/app -s /bin/sh app
 
 WORKDIR /app
 
@@ -21,8 +23,8 @@ ENV PATH="/app/.venv/bin:$PATH" \
     CREWAI_DISABLE_TELEMETRY=true \
     CREWAI_TRACING_ENABLED=false \
     ANONYMIZED_TELEMETRY=False \
-    HOME=/tmp
+    HOME=/home/app
 
-USER 10001
+USER 10001:10001
 
 ENTRYPOINT ["python", "-m", "job_search.server"]
