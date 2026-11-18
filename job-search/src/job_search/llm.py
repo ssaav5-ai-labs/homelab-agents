@@ -2,8 +2,8 @@
 
 Two model aliases (ADR-0008): ``jobs-fast`` and ``jobs-reason``, with
 OpenRouter ``data_collection: deny`` and message redaction.  The scoring
-path uses a tuned variant that requests JSON output, disables reasoning,
-and allows more tokens.
+path uses a tuned variant that requests JSON output and allows more
+tokens; reasoning is excluded from the reply at the gateway.
 """
 
 from __future__ import annotations
