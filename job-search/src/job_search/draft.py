@@ -71,8 +71,7 @@ def _check_claims(draft_text: str, cv_bodies: dict[str, str]) -> list[str]:
 
 def _extract_writer_output(result) -> str:
     for out in getattr(result, "tasks_output", None) or []:
-        agent = getattr(out, "agent", None)
-        if agent is not None and getattr(agent, "role", "") == "Draft Writer":
+        if getattr(out, "agent", None) == "Draft Writer":
             return getattr(out, "raw", "") or ""
     return str(result)
 
