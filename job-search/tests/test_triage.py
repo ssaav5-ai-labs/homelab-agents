@@ -28,29 +28,30 @@ def test_allowed_senders_from_env(monkeypatch):
 
 def test_extract_allows_linkedin_sender():
     raw = read_fixture("is-hiring.eml")
-    result = _extract(raw)
-    assert result is not None
-    from_addr, dedup_key, plain, html, used_fallback = result
+    from_addr, dedup_key, plain, html, used_fallback, rejected = _extract(raw)
     assert "linkedin.com" in from_addr.lower()
     assert "Forward Deployed Engineer" in plain
     assert len(dedup_key) == 64
     assert used_fallback
+    assert not rejected
 
 
 def test_extract_rejects_unknown_sender():
     raw = read_fixture("spam.eml")
-    result = _extract(raw)
-    assert result is None
+    from_addr, dedup_key, plain, html, used_fallback, rejected = _extract(raw)
+    assert rejected
+    assert plain == ""
+    assert html == ""
+    assert len(dedup_key) == 64
 
 
 def test_extract_returns_plain_and_html():
     raw = read_fixture("is-hiring.eml")
-    result = _extract(raw)
-    assert result is not None
-    _from_addr, dedup_key, plain, html, used_fallback = result
+    _from_addr, dedup_key, plain, html, used_fallback, rejected = _extract(raw)
     assert len(plain) > 0
     assert "Joblet-AI" in plain
     assert len(dedup_key) == 64
+    assert not rejected
 
 
 def test_triage_disabled_by_default():
@@ -83,16 +84,16 @@ def test_extract_dedup_key_stable_for_same_message_id():
     raw = read_fixture("is-hiring.eml")
     r1 = _extract(raw)
     r2 = _extract(raw)
-    assert r1 is not None
-    assert r2 is not None
     assert r1[1] == r2[1]
     assert len(r1[1]) == 64
 
 
 def test_extract_fallback_key_when_no_message_id():
     raw = read_fixture("spam.eml")
-    result = _extract(raw)
-    assert result is None
+    from_addr, dedup_key, plain, html, used_fallback, rejected = _extract(raw)
+    assert rejected
+    assert len(dedup_key) == 64
+    assert plain == ""
 
 
 def test_extract_fallback_key_used():
@@ -108,9 +109,9 @@ def test_extract_fallback_key_used():
         b"Some body text\r\n"
     )
     result = _extract(no_message_id)
-    assert result is not None
-    from_addr, dedup_key, plain, html, used_fallback = result
+    from_addr, dedup_key, plain, html, used_fallback, rejected = result
     assert "linkedin" in from_addr.lower()
+    assert not rejected
     assert used_fallback
     assert len(dedup_key) == 64
     expected = hashlib.sha256(
@@ -118,6 +119,26 @@ def test_extract_fallback_key_used():
         b"LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>|Test Alert"
     ).hexdigest()
     assert dedup_key == expected
+
+
+def test_rejected_sender_still_returns_dedup_key():
+    non_linkedin = (
+        b"From: Bad Sender <spammer@example.com>\r\n"
+        b"Date: Mon, 01 Jan 2024 10:00:00 +0000\r\n"
+        b"Subject: Buy stuff\r\n"
+        b"Message-ID: <abc123@example.com>\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: text/plain\r\n"
+        b"\r\n"
+        b"Spam body\r\n"
+    )
+    from_addr, dedup_key, plain, html, used_fallback, rejected = _extract(non_linkedin)
+    assert rejected
+    assert "spammer@example.com" in from_addr.lower()
+    assert len(dedup_key) == 64
+    assert plain == ""
+    assert html == ""
+    assert not used_fallback
 
 
 class _FakeProxySocket:

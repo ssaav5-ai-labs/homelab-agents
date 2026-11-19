@@ -118,20 +118,15 @@ def _fetch_new_alerts(conn: imaplib.IMAP4) -> list[bytes]:
     return bodies
 
 
-def _extract(msg_bytes: bytes) -> tuple[str, str, str, str, bool] | None:
-    """Return (from_addr, dedup_key, plain, html, used_fallback) or None if sender not allowed.
+def _extract(msg_bytes: bytes) -> tuple[str, str, str, str, bool, bool]:
+    """Return (from_addr, dedup_key, plain, html, used_fallback, rejected).
 
     ``dedup_key`` is the sha256 of the Message-ID header, or of ``Date|From|Subject``
-    when there is no Message-ID (``used_fallback`` is then True).
+    when there is no Message-ID (``used_fallback`` is then True). ``rejected`` is True
+    when the sender is not in the allowed list (plain and html are empty in that case).
     """
     msg = email.message_from_bytes(msg_bytes, policy=email.policy.default)
     from_addr = msg.get("From", "")
-    from_addr_low = from_addr.lower()
-    allowed = _allowed_senders()
-
-    if not any(addr in from_addr_low for addr in allowed):
-        logger.info("ignoring message from %s (not in allowed senders)", from_addr)
-        return None
 
     message_id = (msg.get("Message-ID") or "").strip()
     used_fallback = not message_id
@@ -140,6 +135,12 @@ def _extract(msg_bytes: bytes) -> tuple[str, str, str, str, bool] | None:
     else:
         combined = "|".join([msg.get("Date", ""), from_addr, msg.get("Subject", "")])
         dedup_key = hashlib.sha256(combined.encode()).hexdigest()
+
+    from_addr_low = from_addr.lower()
+    allowed = _allowed_senders()
+    if not any(addr in from_addr_low for addr in allowed):
+        logger.info("ignoring message from %s (not in allowed senders)", from_addr)
+        return from_addr, dedup_key, "", "", used_fallback, True
 
     plain = ""
     html = ""
@@ -154,7 +155,7 @@ def _extract(msg_bytes: bytes) -> tuple[str, str, str, str, bool] | None:
         elif ct == "text/html" and not html:
             html = decoded
 
-    return from_addr, dedup_key, plain, html, used_fallback
+    return from_addr, dedup_key, plain, html, used_fallback, False
 
 
 def run() -> None:
@@ -197,15 +198,15 @@ def run() -> None:
     already_processed = 0
     for raw in alerts:
         extracted = _extract(raw)
-        if extracted is None:
-            ignored += 1
-            continue
-        _from_addr, dedup_key, plain, html, used_fallback = extracted
+        _from_addr, dedup_key, plain, html, used_fallback, rejected = extracted
         if dedup_key in processed_state:
             already_processed += 1
             logger.info("email already processed: %s", dedup_key)
             continue
         processed_state[dedup_key] = today
+        if rejected:
+            ignored += 1
+            continue
         if plain:
             records = _parse_alert(plain, "text/plain")
             if not records and html:

@@ -25,6 +25,8 @@ FILL_RE = re.compile(r"\[\[YOU FILL\]\]", re.IGNORECASE)
 
 FILLED_SLOT_RE = re.compile(r"\[\[YOU FILL[^\]]+\]\]", re.IGNORECASE)
 
+_SLOT_TOPICS = ("salary", "right.to.work", "notice", "availability")
+
 
 def _pick_variant(ad_text: str) -> str:
     profile = read_profile()
@@ -44,8 +46,22 @@ def _cv_snapshot(variant: str) -> str:
 
 
 def _check_claims(draft_text: str, cv_bodies: dict[str, str]) -> list[str]:
+    issues: list[str] = []
     filled = FILLED_SLOT_RE.findall(draft_text)
-    return filled
+    if filled:
+        issues.extend([f"filled slot: {f}" for f in filled])
+    draft_lower = draft_text.lower()
+    for topic in _SLOT_TOPICS:
+        pattern = topic.replace(".", r"\s*")
+        for m in re.finditer(pattern, draft_lower):
+            start = max(0, m.start() - 30)
+            end = min(len(draft_lower), m.end() + 50)
+            window = draft_lower[start:end]
+            if "[[you fill]]" not in window:
+                near = draft_lower[m.start():m.end() + 60]
+                issues.append(f"slot filled (missing placeholder): {near}")
+                break
+    return issues
 
 
 def draft_application(ad_text: str, role_id: str = "") -> dict:
