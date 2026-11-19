@@ -22,15 +22,15 @@ import time
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
-from .parse import RoleRecord, parse_alert as _parse_alert
+from .parse import parse_alert as _parse_alert
 from .rules import apply_rules
 from .score import score_role as _score_role
 from .vault import (
     read_digest,
     read_processed_state,
     read_recent_digests,
+    read_roles,
     render_processed_state,
-    write_digest,
     write_digest_and_state,
 )
 
@@ -166,12 +166,17 @@ def run() -> None:
     logger.info("triage started")
     today = datetime.now(UTC).strftime("%Y-%m-%d")
 
+    processed_state = read_processed_state()
+
+    existing_digest = read_digest(today)
+
     try:
         conn = _imap_connect()
     except Exception as exc:
         logger.error("IMAP connect failed: %s", exc)
         lines = [f"# Triage {today}", "", f"IMAP connect failed: {exc}"]
-        write_digest(today, "\n".join(lines))
+        state_text = render_processed_state(processed_state, today)
+        write_digest_and_state(today, "\n".join(lines), state_text)
         return
     logger.info("IMAP login ok")
 
@@ -182,18 +187,25 @@ def run() -> None:
         logger.error("IMAP fetch failed: %s", exc)
         conn.logout()
         lines = [f"# Triage {today}", "", f"IMAP fetch failed: {exc}"]
-        write_digest(today, "\n".join(lines))
+        state_text = render_processed_state(processed_state, today)
+        write_digest_and_state(today, "\n".join(lines), state_text)
         return
     logger.info("alerts fetched=%d", len(alerts))
 
     all_records = []
     ignored = 0
+    already_processed = 0
     for raw in alerts:
         extracted = _extract(raw)
         if extracted is None:
             ignored += 1
             continue
-        _from_addr, plain, html = extracted
+        _from_addr, dedup_key, plain, html, used_fallback = extracted
+        if dedup_key in processed_state:
+            already_processed += 1
+            logger.info("email already processed: %s", dedup_key)
+            continue
+        processed_state[dedup_key] = today
         if plain:
             records = _parse_alert(plain, "text/plain")
             if not records and html:
@@ -204,7 +216,30 @@ def run() -> None:
             continue
         all_records.extend(records)
 
-    logger.info("parsed %d records, ignored %d messages", len(all_records), ignored)
+    logger.info(
+        "parsed %d records, ignored %d messages, already processed=%d",
+        len(all_records), ignored, already_processed,
+    )
+
+    recent_digests = read_recent_digests(14)
+    recent_source_ids: set[str] = set()
+    for content in recent_digests.values():
+        for m in re.finditer(r"- Source: linkedin \((\d+)\)", content):
+            recent_source_ids.add(m.group(1))
+    for role in read_roles():
+        if role.get("source_id"):
+            recent_source_ids.add(role["source_id"])
+
+    if recent_source_ids:
+        filtered = []
+        digest_skipped = 0
+        for rec in all_records:
+            if rec.source_id in recent_source_ids:
+                digest_skipped += 1
+                continue
+            filtered.append(rec)
+        logger.info("digest dedupe skipped=%d", digest_skipped)
+        all_records = filtered
 
     passed, skipped = apply_rules(all_records)
     logger.info("kept=%d", len(passed))
@@ -223,35 +258,50 @@ def run() -> None:
     shortlist = [(r, s) for r, s in sorted_scored if s.get("score", 0) >= threshold][:cap]
     logger.info("shortlisted=%d", len(shortlist))
 
-    lines = [
-        f"# Daily digest {today}",
-        "",
-        f"Alerts: {len(alerts)}, ignored: {ignored}, "
-        f"after rules: {len(passed)}, shortlist: {len(shortlist)}",
-        f"Threshold: {threshold}, cap: {cap}",
-        "",
-    ]
-
-    if skipped:
-        lines.append("## Skipped by rules")
-        for s in skipped[:20]:
-            lines.append(f"- {s}")
-        lines.append("")
-
-    if shortlist:
-        lines.append("## Shortlist")
+    if existing_digest and shortlist:
+        new_lines = []
         for role, result in shortlist:
-            lines.append(f"### {role.title} at {role.company}")
-            lines.append(f"- Score: {result.get('score', '?')}/100")
-            lines.append(f"- Why: {result.get('why', '')}")
-            lines.append(f"- Gaps: {result.get('gaps', '')}")
-            lines.append(f"- URL: {role.url}")
-            lines.append(f"- Source: {role.source} ({role.source_id})")
-            lines.append("")
+            new_lines.append(f"### {role.title} at {role.company}")
+            new_lines.append(f"- Score: {result.get('score', '?')}/100")
+            new_lines.append(f"- Why: {result.get('why', '')}")
+            new_lines.append(f"- Gaps: {result.get('gaps', '')}")
+            new_lines.append(f"- URL: {role.url}")
+            new_lines.append(f"- Source: {role.source} ({role.source_id})")
+            new_lines.append("")
+        digest_content = existing_digest.rstrip() + "\n\n" + "\n".join(new_lines)
     else:
-        lines.append("No roles above threshold.")
+        lines = [
+            f"# Daily digest {today}",
+            "",
+            f"Alerts: {len(alerts)}, ignored: {ignored}, already processed: {already_processed}, "
+            f"after rules: {len(passed)}, shortlist: {len(shortlist)}",
+            f"Threshold: {threshold}, cap: {cap}",
+            "",
+        ]
 
-    commit_sha = write_digest(today, "\n".join(lines))
+        if skipped:
+            lines.append("## Skipped by rules")
+            for s in skipped[:20]:
+                lines.append(f"- {s}")
+            lines.append("")
+
+        if shortlist:
+            lines.append("## Shortlist")
+            for role, result in shortlist:
+                lines.append(f"### {role.title} at {role.company}")
+                lines.append(f"- Score: {result.get('score', '?')}/100")
+                lines.append(f"- Why: {result.get('why', '')}")
+                lines.append(f"- Gaps: {result.get('gaps', '')}")
+                lines.append(f"- URL: {role.url}")
+                lines.append(f"- Source: {role.source} ({role.source_id})")
+                lines.append("")
+        else:
+            lines.append("No roles above threshold.")
+
+        digest_content = "\n".join(lines)
+
+    state_text = render_processed_state(processed_state, today)
+    commit_sha = write_digest_and_state(today, digest_content, state_text)
     logger.info("digest path=%s", f"job-search/digests/{today}.md")
     logger.info("commit sha=%s", commit_sha)
     logger.info("done in %.1fs", time.monotonic() - started)

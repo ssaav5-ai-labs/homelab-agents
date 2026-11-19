@@ -30,9 +30,11 @@ def test_extract_allows_linkedin_sender():
     raw = read_fixture("is-hiring.eml")
     result = _extract(raw)
     assert result is not None
-    from_addr, plain, html = result
+    from_addr, dedup_key, plain, html, used_fallback = result
     assert "linkedin.com" in from_addr.lower()
     assert "Forward Deployed Engineer" in plain
+    assert len(dedup_key) == 64
+    assert used_fallback
 
 
 def test_extract_rejects_unknown_sender():
@@ -45,9 +47,10 @@ def test_extract_returns_plain_and_html():
     raw = read_fixture("is-hiring.eml")
     result = _extract(raw)
     assert result is not None
-    _from_addr, plain, html = result
+    _from_addr, dedup_key, plain, html, used_fallback = result
     assert len(plain) > 0
     assert "Joblet-AI" in plain
+    assert len(dedup_key) == 64
 
 
 def test_triage_disabled_by_default():
@@ -74,6 +77,47 @@ def test_module_entry_point_runs_main():
     output = proc.stdout + proc.stderr
     assert proc.returncode == 0
     assert "job triage disabled" in output
+
+
+def test_extract_dedup_key_stable_for_same_message_id():
+    raw = read_fixture("is-hiring.eml")
+    r1 = _extract(raw)
+    r2 = _extract(raw)
+    assert r1 is not None
+    assert r2 is not None
+    assert r1[1] == r2[1]
+    assert len(r1[1]) == 64
+
+
+def test_extract_fallback_key_when_no_message_id():
+    raw = read_fixture("spam.eml")
+    result = _extract(raw)
+    assert result is None
+
+
+def test_extract_fallback_key_used():
+    import hashlib
+
+    no_message_id = (
+        b"From: LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>\r\n"
+        b"Date: Mon, 01 Jan 2024 10:00:00 +0000\r\n"
+        b"Subject: Test Alert\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: text/plain\r\n"
+        b"\r\n"
+        b"Some body text\r\n"
+    )
+    result = _extract(no_message_id)
+    assert result is not None
+    from_addr, dedup_key, plain, html, used_fallback = result
+    assert "linkedin" in from_addr.lower()
+    assert used_fallback
+    assert len(dedup_key) == 64
+    expected = hashlib.sha256(
+        b"Mon, 01 Jan 2024 10:00:00 +0000|"
+        b"LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>|Test Alert"
+    ).hexdigest()
+    assert dedup_key == expected
 
 
 class _FakeProxySocket:
