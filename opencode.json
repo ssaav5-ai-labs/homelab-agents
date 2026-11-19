@@ -101,7 +101,7 @@
       "rm *": "ask",
       "sudo *": "ask",
       "docker *": "ask",
-      "sleep [1-9][0-9]*": "ask",
+      "sleep ??*": "ask",
       "kubectl get secret *": "ask",
       "kubectl get secrets *": "ask",
       "kubectl * get secret *": "ask",
