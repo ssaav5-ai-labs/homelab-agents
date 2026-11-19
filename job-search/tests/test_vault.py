@@ -30,6 +30,16 @@ def test_path_root_prefix_only():
         _validate_path("../job-search/roles/test.md")
 
 
+def test_path_absolute_refused():
+    with pytest.raises(ValueError):
+        _validate_path("/etc/passwd")
+
+
+def test_path_absolute_under_prefix():
+    with pytest.raises(ValueError):
+        _validate_path("/vault/current/job-search/roles/../README.md")
+
+
 def test_git_env_ssh_command_uses_rw_key_and_known_hosts():
     env = _git_env()
     assert "/etc/vault-keys/rw" in env["GIT_SSH_COMMAND"]
