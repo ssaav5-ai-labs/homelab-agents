@@ -16,6 +16,7 @@ import os
 import socket
 import ssl
 import sys
+import time
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -139,6 +140,7 @@ def run() -> None:
         logger.info("job triage disabled (JOB_TRIAGE_ENABLED!=1)")
         return
 
+    started = time.monotonic()
     logger.info("triage started")
     today = datetime.now(UTC).strftime("%Y-%m-%d")
 
@@ -149,6 +151,7 @@ def run() -> None:
         lines = [f"# Triage {today}", "", f"IMAP connect failed: {exc}"]
         write_digest(today, "\n".join(lines))
         return
+    logger.info("IMAP login ok")
 
     try:
         alerts = _fetch_new_alerts(conn)
@@ -159,6 +162,7 @@ def run() -> None:
         lines = [f"# Triage {today}", "", f"IMAP fetch failed: {exc}"]
         write_digest(today, "\n".join(lines))
         return
+    logger.info("alerts fetched=%d", len(alerts))
 
     all_records = []
     ignored = 0
@@ -181,6 +185,7 @@ def run() -> None:
     logger.info("parsed %d records, ignored %d messages", len(all_records), ignored)
 
     passed, skipped = apply_rules(all_records)
+    logger.info("kept=%d", len(passed))
 
     scored = []
     for role in passed:
@@ -188,12 +193,13 @@ def run() -> None:
             result = _score_role(role.description or f"{role.title} at {role.company}")
             scored.append((role, result))
         except Exception as exc:
-            logger.error("score failed for %s: %s", role.title, exc)
+            logger.error("score failed: %s", exc)
 
     sorted_scored = sorted(scored, key=lambda x: x[1].get("score", 0), reverse=True)
     cap = int(os.environ.get("DAILY_CAP", "5"))
     threshold = int(os.environ.get("SHORTLIST_THRESHOLD", "70"))
     shortlist = [(r, s) for r, s in sorted_scored if s.get("score", 0) >= threshold][:cap]
+    logger.info("shortlisted=%d", len(shortlist))
 
     lines = [
         f"# Daily digest {today}",
@@ -223,11 +229,10 @@ def run() -> None:
     else:
         lines.append("No roles above threshold.")
 
-    write_digest(today, "\n".join(lines))
-    logger.info(
-        "triage done: %d alerts, %d passed, %d shortlisted",
-        len(alerts), len(passed), len(shortlist),
-    )
+    commit_sha = write_digest(today, "\n".join(lines))
+    logger.info("digest path=%s", f"job-search/digests/{today}.md")
+    logger.info("commit sha=%s", commit_sha)
+    logger.info("done in %.1fs", time.monotonic() - started)
 
 
 def main() -> None:
@@ -237,3 +242,7 @@ def main() -> None:
     except Exception as exc:
         logger.error("triage failed: %s", exc)
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

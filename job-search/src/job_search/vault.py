@@ -257,11 +257,12 @@ def _write_vault(items: list[tuple[str, str]], commit_msg: str) -> str:
     for repo_path, _ in items:
         _run_git(work, ["add", repo_path], env)
     _run_git(work, ["commit", "-m", commit_msg], env)
+    sha = _run_git(work, ["rev-parse", "--short", "HEAD"], env)
 
     for attempt in range(2):
         try:
             _run_git(work, ["push", "origin", "main"], env)
-            return "ok"
+            return sha
         except RuntimeError:
             if attempt == 0:
                 logger.warning("push conflict, retrying")
@@ -271,6 +272,7 @@ def _write_vault(items: list[tuple[str, str]], commit_msg: str) -> str:
                 for repo_path, _ in items:
                     _run_git(work, ["add", repo_path], env)
                 _run_git(work, ["commit", "-m", commit_msg], env)
+                sha = _run_git(work, ["rev-parse", "--short", "HEAD"], env)
             else:
                 raise
-    return "ok"
+    return sha
