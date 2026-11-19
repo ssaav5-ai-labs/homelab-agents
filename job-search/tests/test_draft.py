@@ -99,3 +99,43 @@ def test_clean_draft_accepted():
                 result = draft_application(AI_AD, role_id="test-456")
                 assert "rejected" not in result or not result["rejected"]
                 assert result["draft"] == clean
+
+
+def test_checker_summary_slot_mentions_not_rejected():
+    checker_output = (
+        "Validation result: OK\n\n"
+        "No [[YOU FILL]] slots were filled — salary expectations remain unfilled, "
+        "and the [[YOU FILL]] notice period is correct."
+    )
+    clean = (
+        "## CV summary\nExperienced...\n\n"
+        "Salary: [[YOU FILL]]\n"
+        "Right to work: [[YOU FILL]]\n"
+        "Notice: [[YOU FILL]]\n"
+        "Availability: [[YOU FILL]]"
+    )
+    writer_out = MagicMock()
+    writer_out.agent.role = "Draft Writer"
+    writer_out.raw = clean
+    mock_result = MagicMock()
+    mock_result.tasks_output = [writer_out]
+    mock_result.__str__.return_value = checker_output
+
+    with patch("job_search.draft.read_profile", return_value={
+        "target_titles": [], "target_seniority": [], "target_locations": [],
+        "remote_policy": "remote", "cv_general_file": "general.docx",
+    }), patch(
+        "job_search.draft.read_cv",
+        return_value=("cv body text", {"source": "general.docx"}),
+    ):
+        with patch("job_search.draft.list_cv_variants", return_value=[
+            {"variant": "general", "file": "general.docx"},
+        ]):
+            with patch("job_search.draft.Crew") as mock_crew:
+                mock_instance = MagicMock()
+                mock_instance.kickoff.return_value = mock_result
+                mock_crew.return_value = mock_instance
+
+                result = draft_application(AI_AD, role_id="test-789")
+                assert "rejected" not in result or not result["rejected"]
+                assert result["draft"] == checker_output

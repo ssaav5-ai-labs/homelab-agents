@@ -69,6 +69,14 @@ def _check_claims(draft_text: str, cv_bodies: dict[str, str]) -> list[str]:
     return issues
 
 
+def _extract_writer_output(result) -> str:
+    for out in getattr(result, "tasks_output", None) or []:
+        agent = getattr(out, "agent", None)
+        if agent is not None and getattr(agent, "role", "") == "Draft Writer":
+            return getattr(out, "raw", "") or ""
+    return str(result)
+
+
 def draft_application(ad_text: str, role_id: str = "") -> dict:
     variant = _pick_variant(ad_text)
     cv_body = _cv_snapshot(variant)
@@ -185,8 +193,9 @@ def draft_application(ad_text: str, role_id: str = "") -> dict:
 
     result = crew.kickoff()
     draft_text = str(result)
+    writer_text = _extract_writer_output(result)
 
-    filled = _check_claims(draft_text, {"general": "", "ai": ""})
+    filled = _check_claims(writer_text, {"general": "", "ai": ""})
     if filled:
         return {
             "cv_variant": variant,
