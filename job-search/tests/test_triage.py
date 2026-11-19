@@ -1,7 +1,11 @@
 """Test triage sender filtering, text extraction, and IMAP proxy connect."""
 
+import os
 import socket
 import ssl
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -49,6 +53,27 @@ def test_extract_returns_plain_and_html():
 def test_triage_disabled_by_default():
     from job_search import triage
     assert not triage.ENABLED
+
+
+def test_module_entry_point_runs_main():
+    src = Path(__file__).resolve().parent.parent / "src"
+    env = dict(os.environ)
+    env["JOB_TRIAGE_ENABLED"] = "0"
+    env["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    env["PYTHONPATH"] = str(src) + os.pathsep + env.get("PYTHONPATH", "")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "job_search.triage"],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(src),
+        timeout=120,
+    )
+
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 0
+    assert "job triage disabled" in output
 
 
 class _FakeProxySocket:
