@@ -101,6 +101,7 @@
       "rm *": "ask",
       "sudo *": "ask",
       "docker *": "ask",
+      "sleep [1-9][0-9]*": "ask",
       "kubectl get secret *": "ask",
       "kubectl get secrets *": "ask",
       "kubectl * get secret *": "ask",
@@ -142,9 +143,6 @@
       "docker manifest inspect *": "allow",
       "docker buildx imagetools inspect *": "allow",
       "kubectl -n argocd annotate application * argocd.argoproj.io/refresh=*": "allow",
-      "kubectl -n hermes exec deploy/hermes -c hermes -- hermes cron *": "ask",
-      "kubectl -n hermes exec deploy/hermes -c hermes -- hermes skills list": "ask",
-      "kubectl -n hermes exec deploy/hermes -c hermes -- hermes config get *": "ask",
       "rm * *..*": "ask",
       "git push*main*": "deny",
       "git push*HEAD:main*": "deny",
@@ -176,7 +174,11 @@
       "echo *GH_TOKEN*": "deny",
       "kubectl exec*": "deny",
       "kubectl * exec *": "deny",
-      "kubectl cp*": "deny"
+      "kubectl cp*": "deny",
+      "kubectl -n hermes exec deploy/hermes -c hermes -- hermes skills list*": "ask",
+      "kubectl -n hermes exec deploy/hermes -c hermes -- hermes cron list*": "ask",
+      "kubectl -n hermes exec deploy/hermes -c hermes -- hermes mcp list*": "ask",
+      "kubectl -n hermes exec deploy/hermes -c hermes -- hermes --help*": "ask"
     },
     "read": {
       "*": "allow",
