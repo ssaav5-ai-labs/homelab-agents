@@ -36,6 +36,7 @@
   "model": "gateway/code",
   "permission": {
     "external_directory": {
+      "/workspaces/**": "allow",
       "/knowledge/handbook/**": "allow",
       "/tmp/agent/**": "allow"
     },
