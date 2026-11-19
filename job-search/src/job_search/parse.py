@@ -28,7 +28,7 @@ class RoleRecord:
 _LINKEDIN_ID_RE = re.compile(r"/jobs/view/(\d+)")
 
 _LINKEDIN_URL_RE = re.compile(
-    r"View job:\s*(https://www\.linkedin\.com/comm/jobs/view/\d+[^\s]*)",
+    r"View job:\s*(https://www\.linkedin\.com/(?:comm/)?jobs/view/\d+[^\s]*)",
     re.IGNORECASE,
 )
 
