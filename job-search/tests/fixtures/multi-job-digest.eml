@@ -1,12 +1,11 @@
 From: LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>
-To: ssaav5.homelab@gmail.com
+To: alerts@example.com
 Subject: Your job alert digest for today
 MIME-Version: 1.0
 Content-Type: multipart/alternative; boundary="----=_Part_3"
 
 ------=_Part_3
 Content-Type: text/plain;charset=UTF-8
-Content-Transfer-Encoding: quoted-printable
 
 Your job alert for information technology in Ireland
 
@@ -14,14 +13,14 @@ Director of Platform Engineering
 GoodCo
 Dublin
 Apply with resume & profile
-View job: https://www.linkedin.com/comm/jobs/view/11111111/?ref=abc
+View job: https://www.linkedin.com/jobs/view/11111111/
 
 ---------------------------------------------------------
 
 Senior SRE Manager
 OtherCorp
 Remote
-View job: https://www.linkedin.com/comm/jobs/view/22222222/?ref=def
+View job: https://www.linkedin.com/jobs/view/22222222/
 
 ------=_Part_3
 Content-Type: text/html;charset=UTF-8

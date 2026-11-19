@@ -13,23 +13,23 @@ def test_is_hiring():
     plain = extract_text_plain(read_fixture("is-hiring.eml"))
     records = parse_linkedin_digest(plain)
     assert len(records) == 2
-    assert records[0].title == "Forward Deployed Engineer (Remote)"
-    assert records[0].company == "Joblet-AI"
+    assert records[0].title == "Platform Reliability Engineer (Remote)"
+    assert records[0].company == "AcmeCloud"
     assert records[0].location == "Ireland"
     assert records[0].source == "linkedin"
-    assert records[0].source_id == "4490242142"
-    assert records[1].title == "AI Research Engineer (Remote)"
-    assert records[1].source_id == "4490225302"
+    assert records[0].source_id == "1010000001"
+    assert records[1].title == "ML Infrastructure Engineer (Remote)"
+    assert records[1].source_id == "1010000002"
 
 
 def test_actively_recruiting():
     plain = extract_text_plain(read_fixture("actively-recruiting.eml"))
     records = parse_linkedin_digest(plain)
     assert len(records) == 1
-    assert records[0].title == "Director, Technical Product Management"
-    assert records[0].company == "McKesson"
+    assert records[0].title == "Director, Platform & Cloud Engineering"
+    assert records[0].company == "Cloudbridge"
     assert records[0].location == "Cork"
-    assert records[0].source_id == "4483332841"
+    assert records[0].source_id == "1010000003"
 
 
 def test_multi_job_digest():

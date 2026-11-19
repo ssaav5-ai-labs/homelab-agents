@@ -30,7 +30,7 @@ def test_extract_allows_linkedin_sender():
     raw = read_fixture("is-hiring.eml")
     from_addr, dedup_key, plain, html, used_fallback, rejected = _extract(raw)
     assert "linkedin.com" in from_addr.lower()
-    assert "Forward Deployed Engineer" in plain
+    assert "Platform Reliability Engineer" in plain
     assert len(dedup_key) == 64
     assert used_fallback
     assert not rejected
@@ -49,7 +49,7 @@ def test_extract_returns_plain_and_html():
     raw = read_fixture("is-hiring.eml")
     _from_addr, dedup_key, plain, html, used_fallback, rejected = _extract(raw)
     assert len(plain) > 0
-    assert "Joblet-AI" in plain
+    assert "AcmeCloud" in plain
     assert len(dedup_key) == 64
     assert not rejected
 
