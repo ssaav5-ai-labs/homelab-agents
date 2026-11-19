@@ -1,8 +1,11 @@
-"""Test triage sender filtering and text extraction."""
+"""Test triage sender filtering, text extraction, and IMAP proxy connect."""
 
+import socket
+import ssl
 
+import pytest
 
-from job_search.triage import _allowed_senders, _extract
+from job_search.triage import _allowed_senders, _connect_via_proxy, _extract, _ProxyIMAP4
 from tests.fixtures import read_fixture
 
 
@@ -46,3 +49,69 @@ def test_extract_returns_plain_and_html():
 def test_triage_disabled_by_default():
     from job_search import triage
     assert not triage.ENABLED
+
+
+class _FakeProxySocket:
+    def __init__(self, response):
+        self.sent = b""
+        self._response = response
+
+    def sendall(self, data):
+        self.sent += data
+
+    def recv(self, _n):
+        return self._response
+
+
+def test_connect_via_proxy_sends_connect_line(monkeypatch):
+    fake = _FakeProxySocket(b"HTTP/1.1 200 Connection established\r\n\r\n")
+    monkeypatch.setattr(socket, "create_connection", lambda addr, timeout=None: fake)
+    ctx = ssl.create_default_context()
+    monkeypatch.setattr(ctx, "wrap_socket", lambda sock, server_hostname: (sock, server_hostname))
+
+    result = _connect_via_proxy("http://proxy.example.com:3128", "imap.gmail.com", 993, ctx)
+
+    assert result == (fake, "imap.gmail.com")
+    assert fake.sent == b"CONNECT imap.gmail.com:993 HTTP/1.1\r\nHost: imap.gmail.com:993\r\n\r\n"
+
+
+def test_connect_via_proxy_rejects_non_200(monkeypatch):
+    fake = _FakeProxySocket(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+    monkeypatch.setattr(socket, "create_connection", lambda addr, timeout=None: fake)
+    ctx = ssl.create_default_context()
+
+    with pytest.raises(ConnectionError, match="403"):
+        _connect_via_proxy("http://proxy.example.com:3128", "imap.gmail.com", 993, ctx)
+
+
+def test_proxy_imap_reads_greeting_through_tunnel():
+    class FakeTunnel:
+        def __init__(self):
+            self.sent = b""
+            self._tag = b""
+            self._stage = 0
+
+        def sendall(self, data):
+            self.sent += data
+            self._tag = data.split(b" ")[0]
+
+        def makefile(self, _mode):
+            return self
+
+        def readline(self, _n):
+            if self._stage == 0:
+                self._stage = 1
+                return b"* OK IMAP4rev1 Service Ready\r\n"
+            if self._stage == 1:
+                self._stage = 2
+                return b"* CAPABILITY IMAP4rev1\r\n"
+            if self._stage == 2:
+                self._stage = 3
+                return self._tag + b" OK CAPABILITY completed\r\n"
+            return b""
+
+    tunnel = FakeTunnel()
+    conn = _ProxyIMAP4("imap.gmail.com", 993, tunnel)
+
+    assert conn.sock is tunnel
+    assert conn.welcome == b"* OK IMAP4rev1 Service Ready"
