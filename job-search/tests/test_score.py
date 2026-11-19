@@ -1,8 +1,12 @@
 import json
 
+import litellm.exceptions as litellm_exc
+
 from job_search.score import (
+    _classify_gateway_error,
     _compute_score,
     _extract_json,
+    _final_error,
     _parse_dealbreaker,
 )
 
@@ -150,6 +154,92 @@ def test_score_role_success(monkeypatch):
     )
     result = score_role("some ad", title="Director, Platform Engineering")
     assert result["score"] == 100
+
+
+def test_classify_budget_exceeded_error():
+    exc = litellm_exc.BudgetExceededError(current_cost=0.5, max_budget=0.01)
+    assert _classify_gateway_error(exc) == "budget_exceeded"
+
+
+def test_classify_budget_in_400_body():
+    exc = litellm_exc.BadRequestError(
+        "budget has been exceeded", model="jobs-fast", llm_provider="openai"
+    )
+    assert _classify_gateway_error(exc) == "budget_exceeded"
+
+
+def test_classify_401():
+    exc = litellm_exc.AuthenticationError(
+        "bad key", llm_provider="openai", model="jobs-fast"
+    )
+    assert _classify_gateway_error(exc) == "http_401"
+
+
+def test_classify_402():
+    exc = litellm_exc.PaymentRequiredError(
+        "payment required", model="jobs-fast", llm_provider="openai"
+    )
+    assert _classify_gateway_error(exc) == "http_402"
+
+
+def test_classify_retryable():
+    assert _classify_gateway_error(RuntimeError("boom")) is None
+
+
+def test_final_error_budget_message():
+    assert "budget" in _final_error({"finish_reason": "budget_exceeded"})
+    assert "ask the human" in _final_error({"finish_reason": "budget_exceeded"})
+
+
+def test_final_error_401_message():
+    assert "401" in _final_error({"finish_reason": "http_401"})
+
+
+def test_final_error_402_message():
+    assert "402" in _final_error({"finish_reason": "http_402"})
+
+
+def test_final_error_unparseable():
+    msg = _final_error({"finish_reason": "length", "completion_tokens": 0})
+    assert "unparseable" in msg
+
+
+def test_llm_backoff_no_retry_on_budget(monkeypatch):
+    from job_search.score import _llm_call_with_backoff
+
+    calls = []
+
+    def fake_call(prompt, attempt=1):
+        calls.append(attempt)
+        raise litellm_exc.BudgetExceededError(current_cost=0.5, max_budget=0.01)
+
+    monkeypatch.setattr("job_search.score._call_llm", fake_call)
+    content, diag = _llm_call_with_backoff("prompt")
+    assert content == ""
+    assert diag["finish_reason"] == "budget_exceeded"
+    assert calls == [1]
+
+
+def test_score_role_budget_error(monkeypatch):
+    import pytest
+
+    from job_search.score import ScoreError, score_role
+
+    monkeypatch.setattr(
+        "job_search.score.read_profile",
+        lambda: {
+            "scope_platform_sre": 20, "people_leadership": 20, "strategy_ownership": 15,
+            "remote": 15, "ai_ml_scope": 15, "salary_vs_floor": 5, "seniority_fit": 10,
+            "dealbreaker_cap": 40, "target_titles": ["Director"],
+            "target_seniority": ["Director"],
+        },
+    )
+    monkeypatch.setattr(
+        "job_search.score._llm_call_with_backoff",
+        lambda prompt: ("", {"finish_reason": "budget_exceeded"}),
+    )
+    with pytest.raises(ScoreError, match="budget"):
+        score_role("some ad")
 
 
 def test_score_role_error_on_empty_content(monkeypatch):

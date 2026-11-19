@@ -95,6 +95,27 @@ class ScoreError(RuntimeError):
     """Raised when the scorer cannot produce a valid result."""
 
 
+_NONRETRYABLE_MESSAGES = {
+    "budget_exceeded": "jobs budget reached, ask the human to raise the jobs key budget",
+    "http_401": "jobs gateway key rejected (401), ask the human to check the key",
+    "http_402": "jobs gateway key requires payment (402), ask the human to check billing",
+}
+
+
+def _classify_gateway_error(exc: Exception) -> str | None:
+    """Return a non-retryable error tag, or None if the error should be retried."""
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    status = getattr(exc, "status_code", None)
+    if "budget" in name or ("budget" in text and ("exceed" in text or "max budget" in text)):
+        return "budget_exceeded"
+    if status == 402 or "paymentrequired" in name:
+        return "http_402"
+    if status == 401 or "authenticationerror" in name:
+        return "http_401"
+    return None
+
+
 def _strip_fence(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
@@ -122,6 +143,16 @@ _DB_KEYS = {
     "legacy_onprem_only",
     "product_eng_systems_internals",
 }
+
+
+def _final_error(diag: dict) -> str:
+    finish = diag.get("finish_reason")
+    if finish in _NONRETRYABLE_MESSAGES:
+        return f"error: {_NONRETRYABLE_MESSAGES[finish]}"
+    return (
+        f"unparseable reply after 2 attempts "
+        f"(finish={finish}, completion_tokens={diag.get('completion_tokens')})"
+    )
 
 
 def _compute_seniority_fit(title: str, profile: dict) -> tuple[str, int]:
@@ -240,6 +271,11 @@ def _llm_call_with_backoff(prompt: str) -> tuple[str, dict]:
             time.sleep(min(4 ** attempt, 30))
             last_diag = {"finish_reason": "rate_limited"}
         except Exception as exc:
+            tag = _classify_gateway_error(exc)
+            if tag:
+                logger.warning("llm attempt %d: non-retryable %s: %s", attempt, tag, exc)
+                last_diag = {"finish_reason": tag}
+                break
             logger.warning("llm attempt %d: %s", attempt, exc)
             last_diag = {"finish_reason": str(type(exc).__name__)}
             time.sleep(min(2 ** attempt, 10))
@@ -282,12 +318,7 @@ def score_role(ad_text: str, title: str = "") -> dict:
                 diag.get("reasoning_tokens"), diag.get("http_status"),
             )
 
-    msg = (
-        f"unparseable reply after 2 attempts "
-        f"(finish={diag.get('finish_reason')}, "
-        f"completion_tokens={diag.get('completion_tokens')})"
-    )
-    raise ScoreError(msg)
+    raise ScoreError(_final_error(diag))
 
 
 def score_role_with_raw(ad_text: str, title: str = "") -> tuple[dict, str]:
@@ -326,9 +357,4 @@ def score_role_with_raw(ad_text: str, title: str = "") -> tuple[dict, str]:
                 diag.get("reasoning_tokens"), diag.get("http_status"),
             )
 
-    msg = (
-        f"unparseable reply after 2 attempts "
-        f"(finish={diag.get('finish_reason')}, "
-        f"completion_tokens={diag.get('completion_tokens')})"
-    )
-    raise ScoreError(msg)
+    raise ScoreError(_final_error(diag))
