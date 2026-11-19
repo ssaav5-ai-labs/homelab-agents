@@ -1,6 +1,14 @@
 import pytest
 
-from job_search.vault import _git_env, _validate_path, read_roles, to_date
+from job_search.vault import (
+    _git_env,
+    _validate_path,
+    read_processed_state,
+    read_recent_digests,
+    read_roles,
+    render_processed_state,
+    to_date,
+)
 
 
 def test_valid_path():
@@ -151,3 +159,106 @@ def test_commit_in_foreign_owned_repo(monkeypatch, tmp_path):
     )
     assert log.returncode == 0
     assert log.stdout.strip() == "add b"
+
+
+def test_render_processed_state_prunes_old_entries():
+
+    today = "2026-11-19"
+    state = {
+        "aaabbb": "2026-10-01",
+        "ccc111": today,
+        "ddd222": "2026-10-15",
+        "malformed": "",
+    }
+    result = render_processed_state(state, today)
+    lines = result.strip().split("\n") if result.strip() else []
+    hashes = [line.split()[0] for line in lines]
+    assert "ccc111" in hashes
+    assert "aaabbb" not in hashes
+    assert "ddd222" not in hashes
+    assert "malformed" not in hashes
+
+
+def test_render_processed_state_sorted_newest_first():
+    today = "2026-11-19"
+    state = {"key1": "2026-11-15", "key2": "2026-11-19", "key3": "2026-11-10"}
+    result = render_processed_state(state, today)
+    lines = result.strip().split("\n")
+    dates = [line.split()[1] for line in lines]
+    assert dates == ["2026-11-19", "2026-11-15", "2026-11-10"]
+
+
+def test_read_processed_state_parses_hash_date(monkeypatch, tmp_path):
+    import job_search.vault as vault
+
+    state_dir = tmp_path / "job-search" / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "processed.txt").write_text(
+        "abc123 2026-11-18\n"
+        "def456 2026-11-19\n"
+        "\n"
+        "  \n"
+        "bad_line\n"
+        "ghi789 2026-11-17\n"
+    )
+
+    monkeypatch.setattr(vault, "VAULT_READ_ROOT", tmp_path)
+
+    result = read_processed_state()
+    assert result["abc123"] == "2026-11-18"
+    assert result["def456"] == "2026-11-19"
+    assert result["ghi789"] == "2026-11-17"
+    assert "bad_line" in result
+
+
+def test_read_processed_state_empty_if_missing(monkeypatch, tmp_path):
+    import job_search.vault as vault
+
+    monkeypatch.setattr(vault, "VAULT_READ_ROOT", tmp_path)
+    assert read_processed_state() == {}
+
+
+def test_read_recent_digests_returns_last_n_days(monkeypatch, tmp_path):
+    from datetime import date, timedelta
+
+    import job_search.vault as vault
+
+    today = date.today()
+    digests_dir = tmp_path / "job-search" / "digests"
+    digests_dir.mkdir(parents=True)
+
+    expected = {}
+    for i in range(20):
+        date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        content = f"content for {date_str}"
+        (digests_dir / f"{date_str}.md").write_text(content)
+        expected[date_str] = content
+
+    monkeypatch.setattr(vault, "VAULT_READ_ROOT", tmp_path)
+    monkeypatch.setattr(vault, "date", type("MockDate", (), {"today": lambda: today}))
+
+    result = read_recent_digests(7)
+    assert len(result) == 7
+    for date_str, content in result.items():
+        assert date_str in expected
+        assert content == expected[date_str]
+
+
+def test_read_recent_digests_skips_missing_dates(monkeypatch, tmp_path):
+    from datetime import date, timedelta
+
+    import job_search.vault as vault
+
+    today = date.today()
+    digests_dir = tmp_path / "job-search" / "digests"
+    digests_dir.mkdir(parents=True)
+
+    one_day = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    (digests_dir / f"{one_day}.md").write_text("yesterday")
+
+    monkeypatch.setattr(vault, "VAULT_READ_ROOT", tmp_path)
+    monkeypatch.setattr(vault, "date", type("MockDate", (), {"today": lambda: today}))
+
+    result = read_recent_digests(5)
+    assert len(result) == 1
+    assert one_day in result

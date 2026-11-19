@@ -102,7 +102,8 @@ def apply_rules(roles: list[RoleRecord]) -> tuple[list[RoleRecord], list[str]]:
             skip_reason = f"seniority: {role.title}"
 
         if skip_reason:
-            skipped.append(f"SKIP {role.title} at {role.company}: {skip_reason}")
+            sid = f" [{role.source_id}]" if role.source_id else ""
+            skipped.append(f"SKIP {role.title} at {role.company}{sid}: {skip_reason}")
         else:
             passed.append(role)
 

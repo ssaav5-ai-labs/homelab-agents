@@ -13,7 +13,7 @@ import logging
 import os
 import shlex
 import subprocess
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import yaml
@@ -150,6 +150,49 @@ def read_digest(date_str: str) -> str:
     return path.read_text(errors="replace")
 
 
+def read_recent_digests(days: int) -> dict[str, str]:
+    """Return ``{date_str: content}`` for each of the last ``days`` days that has a digest."""
+    today = date.today()
+    result: dict[str, str] = {}
+    for i in range(days):
+        date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        content = read_digest(date_str)
+        if content:
+            result[date_str] = content
+    return result
+
+
+def read_processed_state() -> dict[str, str]:
+    """Return the processed-email state as ``{hash: date}``; ``{}`` if absent."""
+    path = VAULT_READ_ROOT / JOBS_PREFIX / "state" / "processed.txt"
+    if not path.exists():
+        return {}
+    state: dict[str, str] = {}
+    for line in path.read_text(errors="replace").splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        state[parts[0]] = parts[1] if len(parts) > 1 else ""
+    return state
+
+
+def render_processed_state(state: dict[str, str], today: str, days: int = 30) -> str:
+    """Render ``processed.txt``, pruned to the last ``days`` days."""
+    cutoff = date.fromisoformat(today) - timedelta(days=days)
+    kept: list[tuple[str, str]] = []
+    for h, d in state.items():
+        if not d:
+            continue
+        try:
+            if date.fromisoformat(d) < cutoff:
+                continue
+        except ValueError:
+            continue
+        kept.append((d, h))
+    kept.sort(reverse=True)
+    return "".join(f"{h} {d}\n" for d, h in kept)
+
+
 def _run_git(work_dir: Path, args: list[str], env: dict | None = None) -> str:
     cmd = ["git"] + args
     logger.debug("git: %s", shlex.join(cmd))
@@ -229,6 +272,15 @@ def write_digest(date_str: str, content: str) -> str:
     """Write a daily digest."""
     path = f"{SAFE_PATH_PREFIX}digests/{date_str}.md"
     return _write_vault([(path, content)], f"job-search: digest {date_str}")
+
+
+def write_digest_and_state(date_str: str, digest_content: str, state_content: str) -> str:
+    """Write the digest and the processed-email state file in one commit."""
+    items = [
+        (f"{SAFE_PATH_PREFIX}digests/{date_str}.md", digest_content),
+        (f"{SAFE_PATH_PREFIX}state/processed.txt", state_content),
+    ]
+    return _write_vault(items, f"job-search: digest {date_str}")
 
 
 def _validate_path(path: str) -> None:
