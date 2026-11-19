@@ -115,7 +115,7 @@ def test_checker_summary_slot_mentions_not_rejected():
         "Availability: [[YOU FILL]]"
     )
     writer_out = MagicMock()
-    writer_out.agent.role = "Draft Writer"
+    writer_out.agent = "Draft Writer"
     writer_out.raw = clean
     mock_result = MagicMock()
     mock_result.tasks_output = [writer_out]
