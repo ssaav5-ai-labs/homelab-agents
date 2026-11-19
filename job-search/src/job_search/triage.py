@@ -10,20 +10,29 @@ from __future__ import annotations
 
 import email
 import email.policy
+import hashlib
 import imaplib
 import logging
 import os
+import re
 import socket
 import ssl
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
-from .parse import parse_alert as _parse_alert
+from .parse import RoleRecord, parse_alert as _parse_alert
 from .rules import apply_rules
 from .score import score_role as _score_role
-from .vault import write_digest
+from .vault import (
+    read_digest,
+    read_processed_state,
+    read_recent_digests,
+    render_processed_state,
+    write_digest,
+    write_digest_and_state,
+)
 
 logger = logging.getLogger("job-search.triage")
 
@@ -87,16 +96,17 @@ def _imap_connect() -> imaplib.IMAP4:
 
 def _fetch_new_alerts(conn: imaplib.IMAP4) -> list[bytes]:
     conn.select("INBOX", readonly=True)
-    typ, data = conn.search(None, "UNSEEN")
+    since = (datetime.now(UTC).date() - timedelta(days=2)).strftime("%d-%b-%Y")
+    typ, data = conn.search(None, "SINCE", since)
     if typ != "OK":
         logger.warning("IMAP SEARCH failed: %s", typ)
         return []
     ids = data[0].split()
     if not ids:
-        logger.info("no unseen messages")
+        logger.info("no messages since %s", since)
         return []
 
-    logger.info("fetching %d unseen messages with BODY.PEEK", len(ids))
+    logger.info("fetching %d messages since %s with BODY.PEEK", len(ids), since)
     bodies: list[bytes] = []
     for msg_id in ids:
         typ, data = conn.fetch(msg_id, "(BODY.PEEK[])")
@@ -108,8 +118,12 @@ def _fetch_new_alerts(conn: imaplib.IMAP4) -> list[bytes]:
     return bodies
 
 
-def _extract(msg_bytes: bytes) -> tuple[str, str, str] | None:
-    """Return (from_addr, text/plain body, text/html body) or None if sender not allowed."""
+def _extract(msg_bytes: bytes) -> tuple[str, str, str, str, bool] | None:
+    """Return (from_addr, dedup_key, plain, html, used_fallback) or None if sender not allowed.
+
+    ``dedup_key`` is the sha256 of the Message-ID header, or of ``Date|From|Subject``
+    when there is no Message-ID (``used_fallback`` is then True).
+    """
     msg = email.message_from_bytes(msg_bytes, policy=email.policy.default)
     from_addr = msg.get("From", "")
     from_addr_low = from_addr.lower()
@@ -118,6 +132,14 @@ def _extract(msg_bytes: bytes) -> tuple[str, str, str] | None:
     if not any(addr in from_addr_low for addr in allowed):
         logger.info("ignoring message from %s (not in allowed senders)", from_addr)
         return None
+
+    message_id = (msg.get("Message-ID") or "").strip()
+    used_fallback = not message_id
+    if message_id:
+        dedup_key = hashlib.sha256(message_id.encode()).hexdigest()
+    else:
+        combined = "|".join([msg.get("Date", ""), from_addr, msg.get("Subject", "")])
+        dedup_key = hashlib.sha256(combined.encode()).hexdigest()
 
     plain = ""
     html = ""
@@ -132,7 +154,7 @@ def _extract(msg_bytes: bytes) -> tuple[str, str, str] | None:
         elif ct == "text/html" and not html:
             html = decoded
 
-    return from_addr, plain, html
+    return from_addr, dedup_key, plain, html, used_fallback
 
 
 def run() -> None:
