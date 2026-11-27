@@ -205,3 +205,26 @@ def test_proxy_imap_reads_greeting_through_tunnel():
 
     assert conn.sock is tunnel
     assert conn.welcome == b"* OK IMAP4rev1 Service Ready"
+
+def test_below_threshold_roles_listed_with_source_line():
+    import re
+
+    from job_search.parse import RoleRecord
+    from job_search.triage import _below_threshold_lines
+
+    role = RoleRecord(title="Platform Lead", company="AcmeCloud",
+                      url="https://www.linkedin.com/jobs/view/123", source="linkedin",
+                      source_id="123")
+    lines = _below_threshold_lines([(role, {"score": 55, "why": "scope too small"})])
+    text = "\n".join(lines)
+    assert lines[0] == "## Below threshold"
+    assert "Platform Lead at AcmeCloud" in text
+    assert "- Score: 55/100" in text
+    # the digest dedupe regex must still see below-threshold roles
+    assert re.search(r"- Source: linkedin \((\d+)\)", text)
+
+
+def test_below_threshold_empty():
+    from job_search.triage import _below_threshold_lines
+
+    assert _below_threshold_lines([]) == []

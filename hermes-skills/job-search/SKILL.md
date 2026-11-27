@@ -1,7 +1,7 @@
 ---
 name: job-search
 description: "Score a role or job ad, draft an application, mark a role applied or rejected, list today's matches, or summarise the pipeline — through the job-search MCP tools. Use whenever the operator says score, draft (e.g. 'draft 1'), applied or rejected (e.g. 'applied 3'), matches, or pipeline, or posts in #job-search."
-version: 0.2.4
+version: 0.2.5
 license: MIT
 metadata:
   hermes:
@@ -69,6 +69,11 @@ Cron prompts are short one-liners that tell the agent which tool to call. Follow
 exactly — do not add analysis or commentary unless the tool output is empty. If
 `todays_matches` returns "no digest for today" or an empty result, reply with the single
 line "No new matches today" — never treat it as an error.
+
+When a digest exists but has no shortlist, do not collapse it to "No new matches today".
+Post the counts line, then one short line per role under "Below threshold" (title,
+company, score) and under "Skipped by rules" (title, company, reason), so the operator
+sees which real roles were assessed.
 
 ## Limits
 

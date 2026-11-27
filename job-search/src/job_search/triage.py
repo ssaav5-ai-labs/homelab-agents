@@ -158,6 +158,36 @@ def _extract(msg_bytes: bytes) -> tuple[str, str, str, str, bool, bool]:
     return from_addr, dedup_key, plain, html, used_fallback, False
 
 
+def _shortlist_lines(role, result: dict) -> list[str]:
+    return [
+        f"### {role.title} at {role.company}",
+        f"- Score: {result.get('score', '?')}/100",
+        f"- Why: {result.get('why', '')}",
+        f"- Gaps: {result.get('gaps', '')}",
+        f"- URL: {role.url}",
+        f"- Source: {role.source} ({role.source_id})",
+        "",
+    ]
+
+
+def _below_threshold_lines(below: list) -> list[str]:
+    """List scored roles under the threshold, so real roles that were assessed stay visible.
+
+    The ``- Source:`` line keeps the existing digest dedupe regex matching them.
+    """
+    if not below:
+        return []
+    lines = ["## Below threshold"]
+    for role, result in below:
+        lines.append(f"### {role.title} at {role.company}")
+        lines.append(f"- Score: {result.get('score', '?')}/100")
+        lines.append(f"- Why: {result.get('why', '')}")
+        lines.append(f"- URL: {role.url}")
+        lines.append(f"- Source: {role.source} ({role.source_id})")
+        lines.append("")
+    return lines
+
+
 def run() -> None:
     if not ENABLED:
         logger.info("job triage disabled (JOB_TRIAGE_ENABLED!=1)")
@@ -257,18 +287,14 @@ def run() -> None:
     cap = int(os.environ.get("DAILY_CAP", "5"))
     threshold = int(os.environ.get("SHORTLIST_THRESHOLD", "70"))
     shortlist = [(r, s) for r, s in sorted_scored if s.get("score", 0) >= threshold][:cap]
-    logger.info("shortlisted=%d", len(shortlist))
+    below = [(r, s) for r, s in sorted_scored if s.get("score", 0) < threshold]
+    logger.info("shortlisted=%d below_threshold=%d", len(shortlist), len(below))
 
-    if existing_digest and shortlist:
+    if existing_digest and (shortlist or below):
         new_lines = []
         for role, result in shortlist:
-            new_lines.append(f"### {role.title} at {role.company}")
-            new_lines.append(f"- Score: {result.get('score', '?')}/100")
-            new_lines.append(f"- Why: {result.get('why', '')}")
-            new_lines.append(f"- Gaps: {result.get('gaps', '')}")
-            new_lines.append(f"- URL: {role.url}")
-            new_lines.append(f"- Source: {role.source} ({role.source_id})")
-            new_lines.append("")
+            new_lines.extend(_shortlist_lines(role, result))
+        new_lines.extend(_below_threshold_lines(below))
         digest_content = existing_digest.rstrip() + "\n\n" + "\n".join(new_lines)
     else:
         lines = [
@@ -289,15 +315,12 @@ def run() -> None:
         if shortlist:
             lines.append("## Shortlist")
             for role, result in shortlist:
-                lines.append(f"### {role.title} at {role.company}")
-                lines.append(f"- Score: {result.get('score', '?')}/100")
-                lines.append(f"- Why: {result.get('why', '')}")
-                lines.append(f"- Gaps: {result.get('gaps', '')}")
-                lines.append(f"- URL: {role.url}")
-                lines.append(f"- Source: {role.source} ({role.source_id})")
-                lines.append("")
+                lines.extend(_shortlist_lines(role, result))
         else:
             lines.append("No roles above threshold.")
+            lines.append("")
+
+        lines.extend(_below_threshold_lines(below))
 
         digest_content = "\n".join(lines)
 
